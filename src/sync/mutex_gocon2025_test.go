@@ -7,7 +7,8 @@ import (
 )
 
 func TestMyMutex(t *testing.T) {
-	mu := NewMyMutex()
+	// mu := NewMyMutex()
+	var mu MyMutex
 	mu.Lock()
 	mu.Unlock()
 }
@@ -16,7 +17,8 @@ func TestMyMutex(t *testing.T) {
 // TODO: Add equivalent to TestMutexMisuse
 
 func TestMyMutexFairness(t *testing.T) {
-	mu := NewMyMutex()
+	// mu := NewMyMutex()
+	var mu MyMutex
 	stop := make(chan bool)
 	defer close(stop)
 	go func() {

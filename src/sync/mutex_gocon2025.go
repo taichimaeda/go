@@ -7,19 +7,16 @@ import (
 type MyMutex struct {
 	_ noCopy
 
-	mu isync.MyMutex
+	// mu isync.MyMutex1
+	mu isync.MyMutex2
 }
 
-type MyLocker interface {
-	Lock()
-	Unlock()
-}
+// var _ Locker = &isync.MyMutex1{}
+var _ Locker = &isync.MyMutex2{}
 
-func NewMyMutex() MyMutex {
-	return MyMutex{
-		mu: isync.NewMyMutex(),
-	}
-}
+// func NewMyMutex() isync.MyMutex1 {
+// 	return isync.NewMyMutex1()
+// }
 
 func (m *MyMutex) Lock() {
 	m.mu.Lock()
