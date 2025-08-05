@@ -15,7 +15,7 @@ type MyMutex1 struct {
 }
 
 func NewMyMutex1() MyMutex1 {
-	return MyMutex1{sema: 1}
+	return MyMutex1{sema: 1} // need to init sema to 1
 }
 
 func (m *MyMutex1) Lock() {
@@ -39,6 +39,8 @@ type MyMutex2 struct {
 	sema  uint32
 }
 
+// TODO: Add TryLock()
+
 func (m *MyMutex2) Lock() {
 	println("Locking MyMutex...")
 	for atomic.SwapInt32(&m.state, myMutexLocked) != 0 {
@@ -50,6 +52,38 @@ func (m *MyMutex2) Lock() {
 }
 
 func (m *MyMutex2) Unlock() {
+	println("Unlocking MyMutex...")
+	atomic.StoreInt32(&m.state, 0)
+	handoff := false
+	skipframes := 1
+	runtime_Semrelease(&m.sema, handoff, skipframes)
+	println("Unlocking MyMutex complete!")
+}
+
+type MyMutex3 struct {
+	state int32
+	sema  uint32
+}
+
+// TODO: Add TryLock()
+
+func (m *MyMutex3) Lock() {
+	println("Locking MyMutex...")
+	iter := 0
+	for atomic.SwapInt32(&m.state, myMutexLocked) != 0 {
+		if runtime_canSpin(iter) {
+			runtime_doSpin()
+			iter++
+			continue
+		}
+		queueLifo := false
+		skipframes := 1
+		runtime_SemacquireMutex(&m.sema, queueLifo, skipframes)
+	}
+	println("Locking MyMutex complete!")
+}
+
+func (m *MyMutex3) Unlock() {
 	println("Unlocking MyMutex...")
 	atomic.StoreInt32(&m.state, 0)
 	handoff := false

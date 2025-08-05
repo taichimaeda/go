@@ -8,11 +8,11 @@ type MyMutex struct {
 	_ noCopy
 
 	// mu isync.MyMutex1
-	mu isync.MyMutex2
+	// mu isync.MyMutex2
+	mu isync.MyMutex3
 }
 
-// var _ Locker = &isync.MyMutex1{}
-var _ Locker = &isync.MyMutex2{}
+var _ Locker = &MyMutex{}
 
 // func NewMyMutex() isync.MyMutex1 {
 // 	return isync.NewMyMutex1()
