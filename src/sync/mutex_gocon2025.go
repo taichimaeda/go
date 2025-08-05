@@ -15,6 +15,12 @@ type MyLocker interface {
 	Unlock()
 }
 
+func NewMyMutex() MyMutex {
+	return MyMutex{
+		mu: isync.NewMyMutex(),
+	}
+}
+
 func (m *MyMutex) Lock() {
 	m.mu.Lock()
 }

@@ -6,7 +6,7 @@ import (
 )
 
 func TestMyMutex(t *testing.T) {
-	var mu MyMutex
+	mu := NewMyMutex()
 	mu.Lock()
 	mu.Unlock()
 }
