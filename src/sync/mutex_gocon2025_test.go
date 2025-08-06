@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func HammerMyMutex(m *Mutex, loops int, cdone chan bool) {
+func HammerMyMutex(m *MyMutex, loops int, done chan bool) {
 	for i := 0; i < loops; i++ {
 		if i%3 == 0 {
 			if m.TryLock() {
@@ -18,7 +18,7 @@ func HammerMyMutex(m *Mutex, loops int, cdone chan bool) {
 		m.Lock()
 		m.Unlock()
 	}
-	cdone <- true
+	done <- true
 }
 
 func TestMyMutex(t *testing.T) {
@@ -28,7 +28,7 @@ func TestMyMutex(t *testing.T) {
 	defer runtime.SetMutexProfileFraction(0)
 
 	// m := NewMyMutex()
-	var m Mutex
+	var m MyMutex
 
 	m.Lock()
 	if m.TryLock() {
@@ -40,12 +40,16 @@ func TestMyMutex(t *testing.T) {
 	}
 	m.Unlock()
 
-	c := make(chan bool)
+	done := make(chan bool)
 	for i := 0; i < 10; i++ {
-		go HammerMutex(&m, 1000, c)
+		go HammerMyMutex(&m, 1000, done)
 	}
 	for i := 0; i < 10; i++ {
-		<-c
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("can't acquire Mutex in 10 seconds")
+		}
 	}
 }
 

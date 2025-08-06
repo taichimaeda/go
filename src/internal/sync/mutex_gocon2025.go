@@ -7,7 +7,8 @@ import (
 )
 
 const (
-	myMutexLocked = 1 << iota
+	myMutexLocked      = 1 << iota
+	myMutexWaiterShift = iota
 )
 
 /******************************************************************************/
@@ -26,18 +27,20 @@ func NewMyMutex1() MyMutex1 {
 
 func (m *MyMutex1) Lock() {
 	println("Locking MyMutex1...") // using builtin println() to prevent cyclic deps
+	defer println("Locking MyMutex1 complete!")
+
 	queueLifo := false
 	skipframes := 1 // skip 1 caller from stack trace (sync.MyMutex.Lock())
 	runtime_SemacquireMutex(&m.sema, queueLifo, skipframes)
-	println("Locking MyMutex1 complete!")
 }
 
 func (m *MyMutex1) Unlock() {
 	println("Unlocking MyMutex1...")
+	defer println("Unlocking MyMutex1 complete!")
+
 	handoff := false
 	skipframes := 1
 	runtime_Semrelease(&m.sema, handoff, skipframes)
-	println("Unlocking MyMutex1 complete!")
 }
 
 /******************************************************************************/
@@ -50,7 +53,10 @@ type MyMutex2 struct {
 }
 
 func (m *MyMutex2) TryLock() bool {
-	if atomic.SwapInt32(&m.state, mutexLocked) != 0 {
+	println("Trying to lock MyMutex2...")
+	defer println("Trying to lock MyMutex2 complete!")
+
+	if atomic.SwapInt32(&m.state, myMutexLocked) != 0 {
 		return false
 	}
 	return true
@@ -58,21 +64,23 @@ func (m *MyMutex2) TryLock() bool {
 
 func (m *MyMutex2) Lock() {
 	println("Locking MyMutex2...")
+	defer println("Locking MyMutex2 complete!")
+
 	for atomic.SwapInt32(&m.state, myMutexLocked) != 0 {
 		queueLifo := false
 		skipframes := 1
 		runtime_SemacquireMutex(&m.sema, queueLifo, skipframes)
 	}
-	println("Locking MyMutex2 complete!")
 }
 
 func (m *MyMutex2) Unlock() {
 	println("Unlocking MyMutex2...")
+	defer println("Unlocking MyMutex2 complete!")
+
 	atomic.StoreInt32(&m.state, 0)
 	handoff := false
 	skipframes := 1
 	runtime_Semrelease(&m.sema, handoff, skipframes)
-	println("Unlocking MyMutex2 complete!")
 }
 
 /******************************************************************************/
@@ -85,7 +93,10 @@ type MyMutex3 struct {
 }
 
 func (m *MyMutex3) TryLock() bool {
-	if atomic.SwapInt32(&m.state, mutexLocked) != 0 {
+	println("Trying to lock MyMutex3...")
+	defer println("Trying to lock MyMutex3 complete!")
+
+	if atomic.SwapInt32(&m.state, myMutexLocked) != 0 {
 		return false
 	}
 	return true
@@ -93,6 +104,8 @@ func (m *MyMutex3) TryLock() bool {
 
 func (m *MyMutex3) Lock() {
 	println("Locking MyMutex3...")
+	defer println("Locking MyMutex3 complete!")
+
 	iter := 0
 	for atomic.SwapInt32(&m.state, myMutexLocked) != 0 {
 		if runtime_canSpin(iter) {
@@ -104,16 +117,16 @@ func (m *MyMutex3) Lock() {
 		skipframes := 1
 		runtime_SemacquireMutex(&m.sema, queueLifo, skipframes)
 	}
-	println("Locking MyMutex3 complete!")
 }
 
 func (m *MyMutex3) Unlock() {
 	println("Unlocking MyMutex3...")
+	defer println("Unlocking MyMutex3 complete!")
+
 	atomic.StoreInt32(&m.state, 0)
 	handoff := false
 	skipframes := 1
 	runtime_Semrelease(&m.sema, handoff, skipframes)
-	println("Unlocking MyMutex3 complete!")
 }
 
 /******************************************************************************/
@@ -128,33 +141,77 @@ type MyMutex4 struct {
 }
 
 func (m *MyMutex4) TryLock() bool {
-	if atomic.SwapInt32(&m.state, mutexLocked) != 0 {
+	println("Trying to lock MyMutex4...")
+	defer println("Trying to lock MyMutex4 complete!")
+
+	old := m.state
+	if old&myMutexLocked != 0 {
 		return false
+	}
+	if !atomic.CompareAndSwapInt32(&m.state, old, old|myMutexLocked) {
+		return false // could be still unlocked but waiter count decremented by Unlock()
 	}
 	return true
 }
 
 func (m *MyMutex4) Lock() {
 	println("Locking MyMutex4...")
+	defer println("Locking MyMutex4 complete!")
+
+	// fast path
+	if atomic.CompareAndSwapInt32(&m.state, 0, myMutexLocked) {
+		return
+	}
+
+	// slow path
 	iter := 0
-	for atomic.SwapInt32(&m.state, myMutexLocked) != 0 {
-		if runtime_canSpin(iter) {
+	old := m.state // not atomic but ok
+	for {
+		if old&myMutexLocked == myMutexLocked && runtime_canSpin(iter) {
 			runtime_doSpin()
 			iter++
+			old = m.state
 			continue
 		}
-		queueLifo := false
-		skipframes := 1
-		runtime_SemacquireMutex(&m.sema, queueLifo, skipframes)
+		new := old
+		new |= myMutexLocked
+		if old&myMutexLocked == myMutexLocked {
+			new += 1 << myMutexWaiterShift
+		}
+		if atomic.CompareAndSwapInt32(&m.state, old, new) {
+			if old&myMutexLocked == 0 {
+				break
+			}
+			queueLifo := false
+			skipframes := 1
+			runtime_SemacquireMutex(&m.sema, queueLifo, skipframes)
+			iter = 0
+		}
+		old = m.state
 	}
-	println("Locking MyMutex4 complete!")
 }
 
 func (m *MyMutex4) Unlock() {
 	println("Unlocking MyMutex4...")
-	atomic.StoreInt32(&m.state, 0)
-	handoff := false
-	skipframes := 1
-	runtime_Semrelease(&m.sema, handoff, skipframes)
-	println("Unlocking MyMutex4 complete!")
+	defer println("Unlocking MyMutex4 complete!")
+
+	// fast path
+	new := atomic.AddInt32(&m.state, -mutexLocked)
+	if new == 0 {
+		return
+	}
+
+	// slow path
+	old := new
+	for {
+		if old>>myMutexWaiterShift == 0 || old&myMutexLocked == myMutexLocked {
+			return
+		}
+		new = old - 1<<myMutexWaiterShift
+		if atomic.CompareAndSwapInt32(&m.state, old, new) {
+			handoff := false
+			skipframes := 1
+			runtime_Semrelease(&m.sema, handoff, skipframes)
+		}
+	}
 }
