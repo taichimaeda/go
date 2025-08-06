@@ -133,8 +133,6 @@ func (m *MyMutex3) Unlock() {
 /*                                  MyMutex4                                  */
 /******************************************************************************/
 
-// TODO: This is the same impl as MyMutex3
-
 type MyMutex4 struct {
 	state int32
 	sema  uint32
@@ -158,14 +156,15 @@ func (m *MyMutex4) Lock() {
 	println("Locking MyMutex4...")
 	defer println("Locking MyMutex4 complete!")
 
-	// fast path
 	if atomic.CompareAndSwapInt32(&m.state, 0, myMutexLocked) {
 		return
 	}
+	m.lockSlow()
+}
 
-	// slow path
+func (m *MyMutex4) lockSlow() {
 	iter := 0
-	old := m.state // not atomic but ok
+	old := m.state // not atomic but okay due to memory barriers
 	for {
 		if old&myMutexLocked == myMutexLocked && runtime_canSpin(iter) {
 			runtime_doSpin()
@@ -195,16 +194,18 @@ func (m *MyMutex4) Unlock() {
 	println("Unlocking MyMutex4...")
 	defer println("Unlocking MyMutex4 complete!")
 
-	// fast path
 	new := atomic.AddInt32(&m.state, -myMutexLocked)
 	if new == 0 {
 		return
 	}
+	m.unlockSlow(new)
+}
+
+func (m *MyMutex4) unlockSlow(new int32) {
 	if (new+mutexLocked)&mutexLocked == 0 { // add back myMutexLocked in case it was not set initially
 		fatal("Unlocked unlocked MyMutex4!")
 	}
 
-	// slow path
 	old := new
 	for {
 		if old>>myMutexWaiterShift == 0 || old&myMutexLocked != 0 {
