@@ -18,6 +18,10 @@ var _ Locker = &MyMutex{}
 // 	return isync.NewMyMutex1()
 // }
 
+func (m *MyMutex) TryLock() bool {
+	return m.mu.TryLock()
+}
+
 func (m *MyMutex) Lock() {
 	m.mu.Lock()
 }
