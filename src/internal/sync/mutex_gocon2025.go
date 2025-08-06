@@ -329,3 +329,108 @@ func (m *MyMutex5) unlockSlow(new int32) {
 		old = m.state
 	}
 }
+
+/******************************************************************************/
+/*                                  MyMutex6                                  */
+/******************************************************************************/
+
+type MyMutex6 struct {
+	state int32
+	sema  uint32
+}
+
+func (m *MyMutex6) TryLock() bool {
+	println("Trying to lock MyMutex6...")
+	defer println("Trying to lock MyMutex6 complete!")
+
+	old := m.state
+	if old&myMutexLocked != 0 {
+		return false
+	}
+	if !atomic.CompareAndSwapInt32(&m.state, old, old|myMutexLocked) {
+		return false
+	}
+	return true
+}
+
+func (m *MyMutex6) Lock() {
+	println("Locking MyMutex6...")
+	defer println("Locking MyMutex6 complete!")
+
+	if atomic.CompareAndSwapInt32(&m.state, 0, myMutexLocked) {
+		return
+	}
+	m.lockSlow()
+}
+
+func (m *MyMutex6) lockSlow() {
+	waited := false
+	awoke := false
+	iter := 0
+	old := m.state
+	for {
+		if old&myMutexLocked == myMutexLocked && runtime_canSpin(iter) {
+			if !awoke &&
+				old&myMutexWoken == 0 &&
+				old>>myMutexWaiterShift != 0 &&
+				atomic.CompareAndSwapInt32(&m.state, old, old|myMutexWoken) {
+				awoke = true
+			}
+			runtime_doSpin()
+			iter++
+			old = m.state
+			continue
+		}
+		new := old
+		new |= myMutexLocked
+		if old&myMutexLocked == myMutexLocked {
+			new += 1 << myMutexWaiterShift
+		}
+		if awoke {
+			new &^= myMutexWoken
+		}
+		if atomic.CompareAndSwapInt32(&m.state, old, new) {
+			if old&myMutexLocked == 0 {
+				break
+			}
+			queueLifo := waited // insert at the front of waiter queue if sleeping for more than once
+			skipframes := 1
+			waited = true
+			runtime_SemacquireMutex(&m.sema, queueLifo, skipframes)
+			awoke = true
+			iter = 0
+		}
+		old = m.state
+	}
+}
+
+func (m *MyMutex6) Unlock() {
+	println("Unlocking MyMutex6...")
+	defer println("Unlocking MyMutex6 complete!")
+
+	new := atomic.AddInt32(&m.state, -myMutexLocked)
+	if new == 0 {
+		return
+	}
+	m.unlockSlow(new)
+}
+
+func (m *MyMutex6) unlockSlow(new int32) {
+	if (new+myMutexLocked)&myMutexLocked == 0 {
+		fatal("Unlocked unlocked MyMutex6!")
+	}
+
+	old := new
+	for {
+		if old>>myMutexWaiterShift == 0 || old&(myMutexLocked|myMutexWoken) != 0 {
+			return
+		}
+		new = (old - 1<<myMutexWaiterShift) | myMutexWoken
+		if atomic.CompareAndSwapInt32(&m.state, old, new) {
+			handoff := false
+			skipframes := 1
+			runtime_Semrelease(&m.sema, handoff, skipframes)
+		}
+		old = m.state
+	}
+}
