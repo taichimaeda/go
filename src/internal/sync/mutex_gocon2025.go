@@ -148,8 +148,8 @@ func (m *MyMutex4) TryLock() bool {
 	if old&myMutexLocked != 0 {
 		return false
 	}
-	if !atomic.CompareAndSwapInt32(&m.state, old, old|myMutexLocked) {
-		return false // could be still unlocked but waiter count decremented by Unlock()
+	if !atomic.CompareAndSwapInt32(&m.state, old, old|myMutexLocked) { // could be still unlocked but waiter count decremented by Unlock()
+		return false
 	}
 	return true
 }
@@ -196,15 +196,18 @@ func (m *MyMutex4) Unlock() {
 	defer println("Unlocking MyMutex4 complete!")
 
 	// fast path
-	new := atomic.AddInt32(&m.state, -mutexLocked)
+	new := atomic.AddInt32(&m.state, -myMutexLocked)
 	if new == 0 {
 		return
+	}
+	if (new+mutexLocked)&mutexLocked == 0 { // add back myMutexLocked in case it was not set initially
+		fatal("Unlocked unlocked MyMutex4!")
 	}
 
 	// slow path
 	old := new
 	for {
-		if old>>myMutexWaiterShift == 0 || old&myMutexLocked == myMutexLocked {
+		if old>>myMutexWaiterShift == 0 || old&myMutexLocked != 0 {
 			return
 		}
 		new = old - 1<<myMutexWaiterShift
@@ -213,5 +216,6 @@ func (m *MyMutex4) Unlock() {
 			skipframes := 1
 			runtime_Semrelease(&m.sema, handoff, skipframes)
 		}
+		old = m.state
 	}
 }
