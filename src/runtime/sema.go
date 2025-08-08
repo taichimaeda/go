@@ -124,6 +124,11 @@ func internal_sync_runtime_Semrelease(addr *uint32, handoff bool, skipframes int
 	semrelease1(addr, handoff, skipframes)
 }
 
+//go:linkname internal_sync_runtime_Semwakeup internal/sync.runtime_Semwakeup
+func internal_sync_runtime_Semwakeup(addr *uint32, skipframes int) {
+	semwakeup(addr, skipframes)
+}
+
 func readyWithTime(s *sudog, traceskip int) {
 	if s.releasetime != 0 {
 		s.releasetime = cputicks()
@@ -285,6 +290,32 @@ func semrelease1(addr *uint32, handoff bool, skipframes int) {
 			// system stack, since it's not safe to enter the scheduler.
 			goyield()
 		}
+	}
+}
+
+func semwakeup(addr *uint32, skipframes int) {
+	root := semtable.rootFor(addr)
+	if root.nwait.Load() == 0 {
+		return
+	}
+
+	atomic.Xadd(addr, 1) // skip increment if no waiters
+
+	lockWithRank(&root.lock, lockRankRoot)
+	if root.nwait.Load() == 0 {
+		unlock(&root.lock)
+		return
+	}
+	s, _, _ := root.dequeue(addr)
+	if s != nil {
+		root.nwait.Add(-1)
+	}
+	unlock(&root.lock)
+	if s != nil {
+		if s.ticket != 0 {
+			throw("corrupted semaphore ticket") // ticket should be cleared by dequeue()
+		}
+		readyWithTime(s, 5+skipframes)
 	}
 }
 

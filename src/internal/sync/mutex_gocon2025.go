@@ -78,9 +78,10 @@ func (m *MyMutex2) Unlock() {
 	defer println("Unlocking MyMutex2 complete!")
 
 	atomic.StoreInt32(&m.state, 0)
-	handoff := false
 	skipframes := 1
-	runtime_Semrelease(&m.sema, handoff, skipframes)
+	// not part of runtime package
+	// like runtime_Semrelease() does not increment value if no waiters
+	runtime_Semwakeup(&m.sema, skipframes)
 }
 
 /******************************************************************************/
@@ -109,7 +110,7 @@ func (m *MyMutex3) Lock() {
 	iter := 0
 	for atomic.SwapInt32(&m.state, myMutexLocked) != 0 {
 		if runtime_canSpin(iter) {
-			runtime_doSpin()
+			runtime_doSpin() // spin by yielding CPU if possible
 			iter++
 			continue
 		}
@@ -124,9 +125,8 @@ func (m *MyMutex3) Unlock() {
 	defer println("Unlocking MyMutex3 complete!")
 
 	atomic.StoreInt32(&m.state, 0)
-	handoff := false
 	skipframes := 1
-	runtime_Semrelease(&m.sema, handoff, skipframes)
+	runtime_Semwakeup(&m.sema, skipframes)
 }
 
 /******************************************************************************/
@@ -570,7 +570,8 @@ func (m *MyMutex7) unlockSlow(new int32) {
 	} else {
 		handoff := true // directly hand off mutex to starving G at the front of waiter queue
 		skipframes := 2
-		// setting handoff to true makes releasing G to yield CPU so starving G can be rescheduled
+		// setting handoff to true in runtime semaphore makes releasing G to yield CPU immediately
+		// so that starving G's can be rescheduled
 		runtime_Semrelease(&m.sema, handoff, skipframes)
 	}
 }

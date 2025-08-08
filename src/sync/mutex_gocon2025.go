@@ -9,11 +9,11 @@ type MyMutex struct {
 
 	// mu isync.MyMutex1
 	// mu isync.MyMutex2
-	// mu isync.MyMutex3
+	mu isync.MyMutex3
 	// mu isync.MyMutex4
 	// mu isync.MyMutex5
 	// mu isync.MyMutex6
-	mu isync.MyMutex7
+	// mu isync.MyMutex7
 }
 
 var _ Locker = &MyMutex{}
