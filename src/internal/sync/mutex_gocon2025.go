@@ -78,10 +78,10 @@ func (m *MyMutex2) Unlock() {
 	defer println("Unlocking MyMutex2 complete!")
 
 	atomic.StoreInt32(&m.state, 0)
+	handoff := false
 	skipframes := 1
 	// not part of runtime package
-	// like runtime_Semrelease() does not increment value if no waiters
-	runtime_Semwakeup(&m.sema, skipframes)
+	runtime_SemreleaseNoDup(&m.sema, handoff, skipframes)
 }
 
 /******************************************************************************/
@@ -125,8 +125,9 @@ func (m *MyMutex3) Unlock() {
 	defer println("Unlocking MyMutex3 complete!")
 
 	atomic.StoreInt32(&m.state, 0)
+	handoff := false
 	skipframes := 1
-	runtime_Semwakeup(&m.sema, skipframes)
+	runtime_SemreleaseNoDup(&m.sema, handoff, skipframes)
 }
 
 /******************************************************************************/
@@ -262,11 +263,12 @@ func (m *MyMutex5) lockSlow() {
 	old := m.state
 	for {
 		if old&myMutexLocked != 0 && runtime_canSpin(iter) {
-			if !awoke &&
-				// awoke is set to true if myMutexWoken is successfully set by current G or waking up from sema acquire
+			if !awoke && // awoke is set to true if myMutexWoken is successfully set by current G or waking up from sema acquire
 				// no need to set myMutexWoken again if already set successfully current G
 				// no need to set myMutexWoken when waking up from sema acquire because Unlock() handles it
 				old&myMutexWoken == 0 && // no need to set myMutexWoken again if it is already set
+				// this keeps awoke flag to false for G's barging in to acquire mutex
+				// while another G is about to sema release in Unlock() so that sema value never becomes more than 1
 				old>>myMutexWaiterShift != 0 && // if no waiters then Unlock() will not attempt to wake up anyways
 				atomic.CompareAndSwapInt32(&m.state, old, old|myMutexWoken) {
 				awoke = true
@@ -281,7 +283,7 @@ func (m *MyMutex5) lockSlow() {
 			new += 1 << myMutexWaiterShift
 		}
 		if awoke {
-			new &^= myMutexWoken // clear myMutexWoken bit if successfully acquired mutex
+			new &^= myMutexWoken // clear myMutexWoken bit if successfully acquired mutex or going to sleep
 		}
 		if atomic.CompareAndSwapInt32(&m.state, old, new) {
 			if old&myMutexLocked == 0 {

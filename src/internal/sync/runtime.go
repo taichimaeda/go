@@ -31,10 +31,8 @@ func runtime_SemacquireMutex(s *uint32, lifo bool, skipframes int)
 //go:linkname runtime_Semrelease
 func runtime_Semrelease(s *uint32, handoff bool, skipframes int)
 
-// Semwakeup is like Semacquire, but does not increment value if no waiters.
-//
-//go:linkname runtime_Semwakeup
-func runtime_Semwakeup(s *uint32, skipframes int)
+//go:linkname runtime_SemreleaseNoDup
+func runtime_SemreleaseNoDup(s *uint32, handoff bool, skipframes int)
 
 // Active spinning runtime support.
 // runtime_canSpin reports whether spinning makes sense at the moment.
