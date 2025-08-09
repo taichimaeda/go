@@ -218,7 +218,7 @@ func (m *MyMutex4) unlockSlow(new int32) {
 		if atomic.CompareAndSwapInt32(&m.state, old, new) {
 			handoff := false
 			skipframes := 2
-			runtime_Semrelease(&m.sema, handoff, skipframes)
+			runtime_SemreleaseNoDup(&m.sema, handoff, skipframes)
 		}
 		old = m.state
 	}
@@ -326,6 +326,9 @@ func (m *MyMutex5) unlockSlow(new int32) {
 			handoff := false
 			skipframes := 2
 			runtime_Semrelease(&m.sema, handoff, skipframes)
+			if m.sema > 1 {
+				fatal("Sema value should not exceed 1!")
+			}
 		}
 		old = m.state
 	}
@@ -431,6 +434,9 @@ func (m *MyMutex6) unlockSlow(new int32) {
 			handoff := false
 			skipframes := 2
 			runtime_Semrelease(&m.sema, handoff, skipframes)
+			if m.sema > 1 {
+				fatal("Sema value should not exceed 1!")
+			}
 		}
 		old = m.state
 	}
@@ -575,5 +581,8 @@ func (m *MyMutex7) unlockSlow(new int32) {
 		// setting handoff to true in runtime semaphore makes releasing G to yield CPU immediately
 		// so that starving G's can be rescheduled
 		runtime_Semrelease(&m.sema, handoff, skipframes)
+		if m.sema > 1 {
+			fatal("Sema value should not exceed 1!")
+		}
 	}
 }

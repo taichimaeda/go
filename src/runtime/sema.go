@@ -298,7 +298,7 @@ func semrelease1(addr *uint32, handoff bool, skipframes int) {
 func semrelease2(addr *uint32, handoff bool, skipframes int) {
 	root := semtable.rootFor(addr)
 	// atomic.Xadd(addr, 1)
-	atomic.Cas(addr, 0, 1)
+	atomic.Store(addr, 1)
 
 	// Easy case: no waiters?
 	// This check must happen after the xadd, to avoid a missed wakeup
