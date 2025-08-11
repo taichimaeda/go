@@ -78,10 +78,9 @@ func (m *MyMutex2) Unlock() {
 	defer println("Unlocking MyMutex2 complete!")
 
 	atomic.StoreInt32(&m.state, 0)
-	handoff := false
+	max := 1
 	skipframes := 1
-	// not part of runtime package
-	runtime_SemreleaseNoDup(&m.sema, handoff, skipframes)
+	runtime_SemreleaseWithMax(&m.sema, uint32(max), skipframes)
 }
 
 /******************************************************************************/
@@ -125,9 +124,9 @@ func (m *MyMutex3) Unlock() {
 	defer println("Unlocking MyMutex3 complete!")
 
 	atomic.StoreInt32(&m.state, 0)
-	handoff := false
+	max := 1
 	skipframes := 1
-	runtime_SemreleaseNoDup(&m.sema, handoff, skipframes)
+	runtime_SemreleaseWithMax(&m.sema, uint32(max), skipframes)
 }
 
 /******************************************************************************/
@@ -210,7 +209,7 @@ func (m *MyMutex4) Unlock() {
 
 func (m *MyMutex4) unlockSlow(new int32) {
 	if (new+myMutexLocked)&myMutexLocked == 0 { // add back myMutexLocked in case it was not set initially
-		fatal("Unlocked unlocked MyMutex4!")
+		fatal("gocon2025: unlock of unlocked MyMutex4!")
 	}
 
 	old := new
@@ -221,9 +220,11 @@ func (m *MyMutex4) unlockSlow(new int32) {
 		}
 		new = old - 1<<myMutexWaiterShift
 		if atomic.CompareAndSwapInt32(&m.state, old, new) {
-			handoff := false
+			// hack to prevent sema value from wrapping around
+			// cannot set max to 1 since otherwise waiters count can become zero even if there are waiters
+			max := 2 << (32 - myMutexWaiterShift)
 			skipframes := 2
-			runtime_Semrelease(&m.sema, handoff, skipframes)
+			runtime_SemreleaseWithMax(&m.sema, uint32(max), skipframes)
 		}
 		old = m.state
 	}
@@ -317,7 +318,7 @@ func (m *MyMutex5) Unlock() {
 
 func (m *MyMutex5) unlockSlow(new int32) {
 	if (new+myMutexLocked)&myMutexLocked == 0 {
-		fatal("Unlocked unlocked MyMutex5!")
+		fatal("gocon2025: unlock of unlocked MyMutex5!")
 	}
 
 	old := new
@@ -332,7 +333,7 @@ func (m *MyMutex5) unlockSlow(new int32) {
 			skipframes := 2
 			runtime_Semrelease(&m.sema, handoff, skipframes)
 			if m.sema > 1 {
-				fatal("Sema value should not exceed 1!")
+				fatal("gocon2025: sema value should not exceed 1!")
 			}
 		}
 		old = m.state
@@ -425,7 +426,7 @@ func (m *MyMutex6) Unlock() {
 
 func (m *MyMutex6) unlockSlow(new int32) {
 	if (new+myMutexLocked)&myMutexLocked == 0 {
-		fatal("Unlocked unlocked MyMutex6!")
+		fatal("gocon2025: unlock of unlocked MyMutex6!")
 	}
 
 	old := new
@@ -440,7 +441,7 @@ func (m *MyMutex6) unlockSlow(new int32) {
 			skipframes := 2
 			runtime_Semrelease(&m.sema, handoff, skipframes)
 			if m.sema > 1 {
-				fatal("Sema value should not exceed 1!")
+				fatal("gocon2025: sema value should not exceed 1!")
 			}
 		}
 		old = m.state
@@ -562,7 +563,7 @@ func (m *MyMutex7) Unlock() {
 
 func (m *MyMutex7) unlockSlow(new int32) {
 	if (new+myMutexLocked)&myMutexLocked == 0 {
-		fatal("Unlocked unlocked MyMutex7!")
+		fatal("gocon2025: unlock of unlocked MyMutex7!")
 	}
 
 	if new&myMutexStarving == 0 {
@@ -587,7 +588,7 @@ func (m *MyMutex7) unlockSlow(new int32) {
 		// so that starving G's can be rescheduled
 		runtime_Semrelease(&m.sema, handoff, skipframes)
 		if m.sema > 1 {
-			fatal("Sema value should not exceed 1!")
+			fatal("gocon2025: sema value should not exceed 1!")
 		}
 	}
 }

@@ -124,9 +124,9 @@ func internal_sync_runtime_Semrelease(addr *uint32, handoff bool, skipframes int
 	semrelease1(addr, handoff, skipframes)
 }
 
-//go:linkname internal_sync_runtime_SemreleaseNoDup internal/sync.runtime_SemreleaseNoDup
-func internal_sync_runtime_SemreleaseNoDup(addr *uint32, handoff bool, skipframes int) {
-	semrelease2(addr, handoff, skipframes)
+//go:linkname internal_sync_runtime_SemreleaseWithMax internal/sync.runtime_SemreleaseWithMax
+func internal_sync_runtime_SemreleaseWithMax(addr *uint32, max uint32, skipframes int) {
+	semreleaseWithMax(addr, max, skipframes)
 }
 
 func readyWithTime(s *sudog, traceskip int) {
@@ -293,91 +293,26 @@ func semrelease1(addr *uint32, handoff bool, skipframes int) {
 	}
 }
 
-// same as semrelease1 but replaces
-// atomic.Xadd(addr, 1) with atomic.Store(addr, 1)
-func semrelease2(addr *uint32, handoff bool, skipframes int) {
+func semreleaseWithMax(addr *uint32, max uint32, skipframes int) {
 	root := semtable.rootFor(addr)
-	// atomic.Xadd(addr, 1)
-	atomic.Store(addr, 1)
-
-	// Easy case: no waiters?
-	// This check must happen after the xadd, to avoid a missed wakeup
-	// (see loop in semacquire).
-	if root.nwait.Load() == 0 {
-		return
-	}
-
-	// Harder case: search for a waiter and wake it.
 	lockWithRank(&root.lock, lockRankRoot)
+	if atomic.Load(addr) == max {
+		throw("gocon2025: sema value reached max")
+	}
+	atomic.Xadd(addr, 1)
 	if root.nwait.Load() == 0 {
-		// The count is already consumed by another goroutine,
-		// so no need to wake up another goroutine.
 		unlock(&root.lock)
 		return
 	}
-	s, t0, tailtime := root.dequeue(addr)
+	s, _, _ := root.dequeue(addr)
 	if s != nil {
 		root.nwait.Add(-1)
-	}
-	unlock(&root.lock)
-	if s != nil { // May be slow or even yield, so unlock first
-		acquiretime := s.acquiretime
-		if acquiretime != 0 {
-			// Charge contention that this (delayed) unlock caused.
-			// If there are N more goroutines waiting beyond the
-			// one that's waking up, charge their delay as well, so that
-			// contention holding up many goroutines shows up as
-			// more costly than contention holding up a single goroutine.
-			// It would take O(N) time to calculate how long each goroutine
-			// has been waiting, so instead we charge avg(head-wait, tail-wait)*N.
-			// head-wait is the longest wait and tail-wait is the shortest.
-			// (When we do a lifo insertion, we preserve this property by
-			// copying the old head's acquiretime into the inserted new head.
-			// In that case the overall average may be slightly high, but that's fine:
-			// the average of the ends is only an approximation to the actual
-			// average anyway.)
-			// The root.dequeue above changed the head and tail acquiretime
-			// to the current time, so the next unlock will not re-count this contention.
-			dt0 := t0 - acquiretime
-			dt := dt0
-			if s.waiters != 0 {
-				dtail := t0 - tailtime
-				dt += (dtail + dt0) / 2 * int64(s.waiters)
-			}
-			mutexevent(dt, 3+skipframes)
-		}
-		if s.ticket != 0 {
-			throw("corrupted semaphore ticket")
-		}
-		if handoff && cansemacquire(addr) {
-			s.ticket = 1
+		if s.ticket != 0 { // ticket should be cleared by dequeue()
+			throw("gocon2025: corrupted semaphore ticket")
 		}
 		readyWithTime(s, 5+skipframes)
-		if s.ticket == 1 && getg().m.locks == 0 && getg() != getg().m.g0 {
-			// Direct G handoff
-			//
-			// readyWithTime has added the waiter G as runnext in the
-			// current P; we now call the scheduler so that we start running
-			// the waiter G immediately.
-			//
-			// Note that waiter inherits our time slice: this is desirable
-			// to avoid having a highly contended semaphore hog the P
-			// indefinitely. goyield is like Gosched, but it emits a
-			// "preempted" trace event instead and, more importantly, puts
-			// the current G on the local runq instead of the global one.
-			// We only do this in the starving regime (handoff=true), as in
-			// the non-starving case it is possible for a different waiter
-			// to acquire the semaphore while we are yielding/scheduling,
-			// and this would be wasteful. We wait instead to enter starving
-			// regime, and then we start to do direct handoffs of ticket and P.
-			//
-			// See issue 33747 for discussion.
-			//
-			// We don't handoff directly if we're holding locks or on the
-			// system stack, since it's not safe to enter the scheduler.
-			goyield()
-		}
 	}
+	unlock(&root.lock)
 }
 
 func cansemacquire(addr *uint32) bool {

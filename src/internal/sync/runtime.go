@@ -31,8 +31,8 @@ func runtime_SemacquireMutex(s *uint32, lifo bool, skipframes int)
 //go:linkname runtime_Semrelease
 func runtime_Semrelease(s *uint32, handoff bool, skipframes int)
 
-//go:linkname runtime_SemreleaseNoDup
-func runtime_SemreleaseNoDup(s *uint32, handoff bool, skipframes int)
+//go:linkname runtime_SemreleaseWithMax
+func runtime_SemreleaseWithMax(s *uint32, max uint32, skipframes int)
 
 // Active spinning runtime support.
 // runtime_canSpin reports whether spinning makes sense at the moment.
