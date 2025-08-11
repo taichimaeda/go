@@ -148,10 +148,11 @@ func (m *MyMutex4) TryLock() bool {
 		return false
 	}
 	if !atomic.CompareAndSwapInt32(&m.state, old, old|myMutexLocked) {
-		// allows current G to barge in before waiting G's
-		// it could be also be that mutex is still unlocked but waiter count decremented by Unlock()
+		// old could change if mutex is acquired by another G
+		// or the G releasing the mutex modified state in the slow path of Unlock()
 		return false
 	}
+	// allows current G to barge in before waiting G's
 	return true
 }
 
@@ -160,12 +161,14 @@ func (m *MyMutex4) Lock() {
 	defer println("Locking MyMutex4 complete!")
 
 	if atomic.CompareAndSwapInt32(&m.state, 0, myMutexLocked) {
-		return // allows current G to barge in before waiting G's
+		return
 	}
+	// above CAS may fail even if the mutex is unlocked when there are waiters
 	m.lockSlow()
 }
 
 func (m *MyMutex4) lockSlow() {
+	// read, copy and update (RCU) loop
 	iter := 0
 	old := m.state // not atomic but okay due to memory barriers
 	for {
@@ -196,9 +199,11 @@ func (m *MyMutex4) Unlock() {
 	println("Unlocking MyMutex4...")
 	defer println("Unlocking MyMutex4 complete!")
 
+	// safe to subtract rather than performing CAS
+	// because myMutexLocked bit should be 1 when Unlock() is called
 	new := atomic.AddInt32(&m.state, -myMutexLocked)
 	if new == 0 {
-		return
+		return // no need to wake up since there are no waiters
 	}
 	m.unlockSlow(new)
 }
@@ -218,7 +223,7 @@ func (m *MyMutex4) unlockSlow(new int32) {
 		if atomic.CompareAndSwapInt32(&m.state, old, new) {
 			handoff := false
 			skipframes := 2
-			runtime_SemreleaseNoDup(&m.sema, handoff, skipframes)
+			runtime_Semrelease(&m.sema, handoff, skipframes)
 		}
 		old = m.state
 	}
@@ -258,17 +263,17 @@ func (m *MyMutex5) Lock() {
 }
 
 func (m *MyMutex5) lockSlow() {
-	awoke := false // true if current G is spinning awake
+	awoke := false // true if current G being awake is already reflected in the myMutexWoken bit
 	iter := 0
 	old := m.state
 	for {
 		if old&myMutexLocked != 0 && runtime_canSpin(iter) {
-			if !awoke && // awoke is set to true if myMutexWoken is successfully set by current G or waking up from sema acquire
-				// no need to set myMutexWoken again if already set successfully current G
-				// no need to set myMutexWoken when waking up from sema acquire because Unlock() handles it
+			if !awoke && // awoke is set to true if myMutexWoken is successfully set by current G or waking up from sema acquire below
+				// no need to set myMutexWoken again if current G already set it successfully
+				// no need to set myMutexWoken when waking up from sema acquire because Unlock() sets it instead
 				old&myMutexWoken == 0 && // no need to set myMutexWoken again if it is already set
-				// this keeps awoke flag to false for G's barging in to acquire mutex
-				// while another G is about to sema release in Unlock() so that sema value never becomes more than 1
+				// crucial to keep awoke flag false in this case
+				// otherwise myMutexWoken will be cleared in the next CAS, which allows for duplicate calls to sema release in Unlock()
 				old>>myMutexWaiterShift != 0 && // if no waiters then Unlock() will not attempt to wake up anyways
 				atomic.CompareAndSwapInt32(&m.state, old, old|myMutexWoken) {
 				awoke = true
