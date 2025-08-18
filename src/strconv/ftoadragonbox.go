@@ -6,13 +6,12 @@ import "math/bits"
 const (
 	minExponent = -1022 // -126 if float32
 	totalBits   = 64    // 32 if float32
-	carrierBits = 64    // 32 if float32
 )
 
-// ryuFtoaShortest formats mant*2^exp with prec decimal digits.
-func dragonboxFtoaShortest(d *decimalSlice, mant uint64, exp int, flt *floatInfo) (uint64, int) {
+func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, flt *floatInfo) {
 	if mant == 0 {
-		return mant, 0 // TODO: fix
+		d.nd, d.dp = 0, 0
+		return
 	}
 
 	// normal_internval = {even, even}
@@ -39,7 +38,9 @@ func dragonboxFtoaShortest(d *decimalSlice, mant uint64, exp int, flt *floatInfo
 			decMant := divideByPow10(zi, (((2<<flt.mantbits)+1)/3+1)*20, 1)
 
 			if decMant*10 >= xi {
-				return removeTrailingZeros(decMant, minusK+1)
+				decMant, decExp := removeTrailingZeros(decMant, minusK+1)
+				formatScientific(d, decMant, decExp)
+				return
 			}
 
 			decMant = computeRoundUpForShorterIntervalCase(cache, beta, flt)
@@ -51,7 +52,8 @@ func dragonboxFtoaShortest(d *decimalSlice, mant uint64, exp int, flt *floatInfo
 			} else {
 				decMant++
 			}
-			return decMant, minusK // TODO: fix
+			formatScientific(d, decMant, minusK)
+			return
 		}
 
 		twoFc |= 1 << (flt.mantbits + 1)
@@ -63,7 +65,7 @@ func dragonboxFtoaShortest(d *decimalSlice, mant uint64, exp int, flt *floatInfo
 	/* Step 1: Schubfach multiplier calculation.                                  */
 	/******************************************************************************/
 
-	kappa := floorLog10Pow2(carrierBits-int(flt.mantbits)-2) - 1
+	kappa := floorLog10Pow2(totalBits-int(flt.mantbits)-2) - 1
 	minusK := floorLog10Pow2(binExp) - kappa
 	beta := binExp + floorLog2Pow10(-minusK)
 
@@ -97,8 +99,8 @@ func dragonboxFtoaShortest(d *decimalSlice, mant uint64, exp int, flt *floatInfo
 			goto step3 // TODO: refactor
 		}
 	}
-
-	return removeTrailingZeros(decMant, minusK+kappa) // TODO: fix
+	formatScientific(d, decMant, minusK+kappa)
+	return
 
 	/******************************************************************************/
 	/* Step 3: Find the significand with the smaller divisor.                     */
@@ -123,8 +125,30 @@ step3:
 			}
 		}
 	}
+	formatScientific(d, decMant, minusK+kappa)
+}
 
-	return decMant, minusK + kappa // TODO: fix
+func formatScientific(d *decimalSlice, mant uint64, exp int) {
+	if mant < 10 {
+		d.d = append(d.d, byte('0'+mant))
+		d.nd++
+	} else {
+		start := len(d.d)
+		for mant >= 10 {
+			d.d = append(d.d, byte('0'+mant%10))
+			d.nd++
+			mant /= 10
+		}
+		d.d = append(d.d, byte('0'+mant))
+		d.d = append(d.d, '.')
+		d.nd += 2
+		// reverse the digits before the dot
+		for i, j := start, len(d.d)-2; i < j; i, j = i+1, j-1 {
+			d.d[i], d.d[j] = d.d[j], d.d[i]
+		}
+	}
+	// adjust exponent
+	d.dp -= exp // TODO: this is wrong
 }
 
 type uint128 struct {
@@ -245,7 +269,7 @@ func divideByPow10(n, nMax uint64, k int) uint64 {
 }
 
 func checkDivisibilityAndDivideByPow10(n uint64, k int) (divided uint64, ok bool) {
-	if k+1 > floorLog10Pow2(carrierBits) {
+	if k+1 > floorLog10Pow2(totalBits) {
 		panic("k out of range")
 	}
 	if n > computePower(10, k+1) {
@@ -355,13 +379,6 @@ func removeTrailingZeros(mant uint64, exp int) (uint64, int) {
 
 	exp += s
 	return mant, exp
-}
-
-func boolToUint64(b bool) uint64 {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 var cache = [619]uint128{
