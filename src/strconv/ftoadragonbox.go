@@ -229,7 +229,7 @@ func computeDelta(cache uint128, beta int, flt *floatInfo) uint64 {
 // computes a^k by squaring
 func computePower(a uint64, k int) uint64 {
 	if k < 0 {
-		panic("exponent must be non-negative")
+		panic("computePower: exponent must be non-negative")
 	}
 	p := uint64(1)
 	e := k
@@ -260,10 +260,10 @@ func divideByPow10(n, nMax uint64, k int) uint64 {
 
 func checkDivisibilityAndDivideByPow10(n uint64, k int, flt *floatInfo) (divided uint64, ok bool) {
 	if k+1 > floorLog10Pow2(int(flt.size)) {
-		panic("k out of range")
+		panic("checkDivisibilityAndDivideByPow10: k out of range")
 	}
 	if n > computePower(10, k+1) {
-		panic("n exceeds allowed value")
+		panic("checkDivisibilityAndDivideByPow10: n exceeds allowed value")
 	}
 
 	divideMagicNumbers := [2]uint32{6554, 656}
@@ -279,7 +279,7 @@ func checkDivisibilityAndDivideByPow10(n uint64, k int, flt *floatInfo) (divided
 
 func floorLog10Pow2(e int) int {
 	if e < -2620 || e > 2620 {
-		panic("e out of range")
+		panic("floorLog10Pow2: e out of range")
 	}
 	return (e * 315653) >> 20
 }
@@ -287,28 +287,28 @@ func floorLog10Pow2(e int) int {
 func floorLog2Pow10(e int) int {
 	// Formula itself holds on [-4003,4003]; restricted to [-1233,1233] to avoid overflow
 	if e < -1233 || e > 1233 {
-		panic("e out of range")
+		panic("floorLog2Pow10: e out of range")
 	}
 	return (e * 1741647) >> 19
 }
 
 func floorLog10Pow2MinusLog10Of4Over3(e int) int {
 	if e < -2985 || e > 2936 {
-		panic("e out of range")
+		panic("floorLog10Pow2MinusLog10Of4Over3: e out of range")
 	}
 	return (e*631305 - 261663) >> 21
 }
 
 func floorLog5Pow2(e int) int {
 	if e < -1831 || e > 1831 {
-		panic("e out of range")
+		panic("floorLog5Pow2: e out of range")
 	}
 	return (e * 225799) >> 19
 }
 
 func floorLog5Pow2MinusLog5Of3(e int) int {
 	if e < -3543 || e > 2427 {
-		panic("e out of range")
+		panic("floorLog5Pow2MinusLog5Of3: e out of range")
 	}
 	return (e*451597 - 715764) >> 20
 }
@@ -999,7 +999,7 @@ const (
 
 func getCache(k int) uint128 {
 	if k < cacheMinK || k > cacheMaxK {
-		panic("k out of range")
+		panic("getCache: k out of range")
 	}
 	return cache[k-cacheMinK]
 }
