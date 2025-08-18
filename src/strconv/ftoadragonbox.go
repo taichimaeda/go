@@ -1,35 +1,31 @@
+// Copyright 2021 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package strconv
 
 import "math/bits"
 
-// TODO: include in floatInfo
-const (
-	minExponent = -1022 // -126 if float32
-	totalBits   = 64    // 32 if float32
-)
+// normal_internval = {even, even}
+// shorter_interval = {true, true}
 
-func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, flt *floatInfo) {
+func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, subnorm bool, flt *floatInfo) {
 	if mant == 0 {
 		d.nd, d.dp = 0, 0
 		return
 	}
 
-	// normal_internval = {even, even}
-	// shorter_interval = {true, true}
-
-	twoFc := mant * 2
 	binExp := exp
+	twoMant := mant * 2
 
-	if binExp != 0 { // TODO: this check is not correct
+	if !subnorm {
 		// already adjusted
-		// bin_exp += flt.bias - int(flt.mantbits)
+		// binExp += flt.bias - int(flt.mantbits)
 
-		if twoFc == 0 {
-			// Compute k and beta.
+		if twoMant == 0 {
 			minusK := floorLog10Pow2MinusLog10Of4Over3(binExp)
 			beta := binExp + floorLog2Pow10(-minusK)
 
-			// Compute xi and zi.
 			cache := getCache(-minusK)
 
 			xi := computeLeftEndpointForShorterIntervalCase(cache, beta, flt)
@@ -56,23 +52,24 @@ func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, flt *floatInfo) {
 			return
 		}
 
-		twoFc |= 1 << (flt.mantbits + 1)
+		twoMant |= 1 << (flt.mantbits + 1)
 	} else {
-		binExp = minExponent - int(flt.mantbits)
+		minExp := flt.bias + 1
+		binExp = minExp - int(flt.mantbits)
 	}
 
 	/******************************************************************************/
 	/* Step 1: Schubfach multiplier calculation.                                  */
 	/******************************************************************************/
 
-	kappa := floorLog10Pow2(totalBits-int(flt.mantbits)-2) - 1
+	kappa := floorLog10Pow2(int(flt.size)-int(flt.mantbits)-2) - 1
 	minusK := floorLog10Pow2(binExp) - kappa
 	beta := binExp + floorLog2Pow10(-minusK)
 
 	cache := getCache(-minusK)
 
-	deltaI := computeDelta(cache, beta)
-	zIntPart, zIsInt := computeMul(uint64(twoFc|1)<<beta, cache)
+	deltaI := computeDelta(cache, beta, flt)
+	zIntPart, zIsInt := computeMul(uint64(twoMant|1)<<beta, cache)
 
 	/******************************************************************************/
 	/* Step 2: Try larger divisor; remove trailing zeros if necessary.            */
@@ -89,33 +86,28 @@ func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, flt *floatInfo) {
 		if r == 0 && zIsInt && !even {
 			decMant--
 			r = bigDivisor
-			goto step3 // TODO: refactor
 		}
-	} else if r > deltaI {
-		goto step3 // TODO: refactor
-	} else {
-		xParity, xIsInt := computeMulParity(uint64(twoFc-1), cache, beta)
-		if !(xParity || (xIsInt && even)) {
-			goto step3 // TODO: refactor
+	} else if r <= deltaI {
+		xParity, xIsInt := computeMulParity(uint64(twoMant-1), cache, beta)
+		if xParity || (xIsInt && even) {
+			formatScientific(d, decMant, minusK+kappa)
+			return
 		}
 	}
-	formatScientific(d, decMant, minusK+kappa)
-	return
 
 	/******************************************************************************/
 	/* Step 3: Find the significand with the smaller divisor.                     */
 	/******************************************************************************/
 
-step3:
 	decMant *= 10
 	dist := uint64(r - (deltaI / 2) + (smallDivisor / 2))
 	approxYParity := ((dist ^ (smallDivisor / 2)) & 1) != 0
-	dist, divisible := checkDivisibilityAndDivideByPow10(dist, kappa)
+	dist, divisible := checkDivisibilityAndDivideByPow10(dist, kappa, flt)
 
 	decMant += dist
 
 	if divisible {
-		yParity, yIsInt := computeMulParity(twoFc, cache, beta)
+		yParity, yIsInt := computeMulParity(twoMant, cache, beta)
 		if yParity != approxYParity {
 			decMant--
 		} else {
@@ -133,22 +125,20 @@ func formatScientific(d *decimalSlice, mant uint64, exp int) {
 		d.d = append(d.d, byte('0'+mant))
 		d.nd++
 	} else {
-		start := len(d.d)
 		for mant >= 10 {
 			d.d = append(d.d, byte('0'+mant%10))
 			d.nd++
 			mant /= 10
 		}
 		d.d = append(d.d, byte('0'+mant))
-		d.d = append(d.d, '.')
-		d.nd += 2
-		// reverse the digits before the dot
-		for i, j := start, len(d.d)-2; i < j; i, j = i+1, j-1 {
+		d.nd++
+		// reverse the digits
+		for i, j := 0, d.nd-2; i < j; i, j = i+1, j-1 {
 			d.d[i], d.d[j] = d.d[j], d.d[i]
 		}
 	}
 	// adjust exponent
-	d.dp -= exp // TODO: this is wrong
+	d.dp = exp + 1 // TODO: is this ok?
 }
 
 type uint128 struct {
@@ -232,8 +222,8 @@ func computeMulParity(twoF uint64, cache uint128, beta int) (parity bool, isInt 
 	return
 }
 
-func computeDelta(cache uint128, beta int) uint64 {
-	return cache.hi >> (totalBits - 1 - beta)
+func computeDelta(cache uint128, beta int, flt *floatInfo) uint64 {
+	return cache.hi >> (int(flt.size) - 1 - beta)
 }
 
 // computes a^k by squaring
@@ -268,8 +258,8 @@ func divideByPow10(n, nMax uint64, k int) uint64 {
 	}
 }
 
-func checkDivisibilityAndDivideByPow10(n uint64, k int) (divided uint64, ok bool) {
-	if k+1 > floorLog10Pow2(totalBits) {
+func checkDivisibilityAndDivideByPow10(n uint64, k int, flt *floatInfo) (divided uint64, ok bool) {
+	if k+1 > floorLog10Pow2(int(flt.size)) {
 		panic("k out of range")
 	}
 	if n > computePower(10, k+1) {
@@ -331,16 +321,16 @@ func shorterIntervalTieThresholds(flt *floatInfo) (lower, upper int) {
 
 func computeLeftEndpointForShorterIntervalCase(cache uint128, beta int, flt *floatInfo) uint64 {
 	return (cache.hi - (cache.hi >> (flt.mantbits + 2))) >>
-		(totalBits - int(flt.mantbits) - 1 - beta)
+		(int(flt.size) - int(flt.mantbits) - 1 - beta)
 }
 
 func computeRightEndpointForShorterIntervalCase(cache uint128, beta int, flt *floatInfo) uint64 {
 	return (cache.hi + (cache.hi >> (flt.mantbits + 1))) >>
-		(totalBits - int(flt.mantbits) - 1 - beta)
+		(int(flt.size) - int(flt.mantbits) - 1 - beta)
 }
 
 func computeRoundUpForShorterIntervalCase(cache uint128, beta int, flt *floatInfo) uint64 {
-	return (cache.hi>>(totalBits-int(flt.mantbits)-2-beta) + 1) / 2
+	return (cache.hi>>(int(flt.size)-int(flt.mantbits)-2-beta) + 1) / 2
 }
 
 // returns 1 if a < b, 0 otherwise
