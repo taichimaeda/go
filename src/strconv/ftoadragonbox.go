@@ -1297,9 +1297,23 @@ var cache32 = [78]uint64{
 	0xb35dbf821ae4f38c, 0xe0352f62a19e306f,
 }
 
-// utility function for fuzz testing
-func CompareDragonboxFto64AndRyuShortestFtoa(
-	bitSize int, val32 float32, val64 float64, errorFunc func(string, ...any)) {
+type testInfo struct {
+	val    float64
+	neg    bool
+	mant   uint64
+	exp    int
+	denorm bool
+	flt    *floatInfo
+}
+
+type errorInfo struct {
+	Val             float64
+	RyuOutput       string
+	DragonboxOutput string
+}
+
+// utility function for testing
+func newTestInfo(bitSize int, val32 float32, val64 float64) (testInfo, bool) {
 	var val float64
 	var bits uint64
 	var flt *floatInfo
@@ -1325,7 +1339,7 @@ func CompareDragonboxFto64AndRyuShortestFtoa(
 	switch exp {
 	case 1<<flt.expbits - 1:
 		// Inf, NaN
-		return // ignore for testing
+		return testInfo{}, false // skip for testing
 
 	case 0:
 		// denormalized
@@ -1337,6 +1351,22 @@ func CompareDragonboxFto64AndRyuShortestFtoa(
 		mant |= uint64(1) << flt.mantbits
 	}
 	exp += flt.bias
+	return testInfo{val, neg, mant, exp, denorm, flt}, true
+}
+
+// utility function for fuzz testing
+func CompareDragonboxFtoaAndRyuShortestFtoa(bitSize int, val32 float32, val64 float64) *errorInfo {
+	test, ok := newTestInfo(bitSize, val32, val64)
+	if !ok {
+		return nil
+	}
+
+	val := test.val
+	neg := test.neg
+	mant := test.mant
+	exp := test.exp
+	flt := test.flt
+	denorm := test.denorm
 
 	var digs1 decimalSlice
 	var dbuf1 [32]byte
@@ -1355,13 +1385,64 @@ func CompareDragonboxFto64AndRyuShortestFtoa(
 
 	var fbuf1 [32]byte
 	prec1 := max(digs1.nd-1, 0)
-	res1 := formatDigits(fbuf1[:0], true, neg, digs1, prec1, 'e')
+	res1 := string(formatDigits(fbuf1[:0], true, neg, digs1, prec1, 'e'))
 
 	var fbuf2 [32]byte
 	prec2 := max(digs2.nd-1, 0)
-	res2 := formatDigits(fbuf2[:0], true, neg, digs2, prec2, 'e')
+	res2 := string(formatDigits(fbuf2[:0], true, neg, digs2, prec2, 'e'))
 
-	if string(res1) != string(res2) {
-		errorFunc("Mismatch!\nInput: %e\nResult: %s %s", val, res1, res2)
+	if res1 != res2 {
+		return &errorInfo{val, res1, res2}
 	}
+	return nil
+}
+
+// utility function for benchmarking
+func RunDragonboxFtoa(bitSize int, val32 float32, val64 float64) {
+	test, ok := newTestInfo(bitSize, val32, val64)
+	if !ok {
+		return
+	}
+
+	neg := test.neg
+	mant := test.mant
+	exp := test.exp
+	flt := test.flt
+	denorm := test.denorm
+
+	var digs decimalSlice
+	var dbuf [32]byte
+	digs.d = dbuf[:]
+	switch bitSize {
+	case 32:
+		dragonboxFtoa32(&digs, uint32(mant), exp-int(flt.mantbits), denorm)
+	case 64:
+		dragonboxFtoa64(&digs, mant, exp-int(flt.mantbits), denorm)
+	}
+
+	var fbuf [32]byte
+	prec := max(digs.nd-1, 0)
+	formatDigits(fbuf[:0], true, neg, digs, prec, 'e')
+}
+
+// utility function for benchmarking
+func RunRyuFtoaShortest(bitSize int, val32 float32, val64 float64) {
+	test, ok := newTestInfo(bitSize, val32, val64)
+	if !ok {
+		return
+	}
+
+	neg := test.neg
+	mant := test.mant
+	exp := test.exp
+	flt := test.flt
+
+	var digs decimalSlice
+	var dbuf [32]byte
+	digs.d = dbuf[:]
+	ryuFtoaShortest(&digs, mant, exp-int(flt.mantbits), flt)
+
+	var fbuf [32]byte
+	prec := max(digs.nd-1, 0)
+	formatDigits(fbuf[:0], true, neg, digs, prec, 'e')
 }
