@@ -14,14 +14,13 @@ import "math"
 
 // TODO: move elsewhere?
 type floatInfo struct {
-	size     uint
 	mantbits uint
 	expbits  uint
 	bias     int
 }
 
-var float32info = floatInfo{32, 23, 8, -127}
-var float64info = floatInfo{64, 52, 11, -1023}
+var float32info = floatInfo{23, 8, -127}
+var float64info = floatInfo{52, 11, -1023}
 
 // FormatFloat converts the floating-point number f to a string,
 // according to the format fmt and precision prec. It rounds the
@@ -74,8 +73,6 @@ func genericFtoa(dst []byte, val float64, fmt byte, prec, bitSize int) []byte {
 	neg := bits>>(flt.expbits+flt.mantbits) != 0
 	exp := int(bits>>flt.mantbits) & (1<<flt.expbits - 1)
 	mant := bits & (uint64(1)<<flt.mantbits - 1)
-	// TODO: uncomment below
-	// subnorm := false
 
 	switch exp {
 	case 1<<flt.expbits - 1:
@@ -94,8 +91,6 @@ func genericFtoa(dst []byte, val float64, fmt byte, prec, bitSize int) []byte {
 	case 0:
 		// denormalized
 		exp++
-		// TODO: uncomment below
-		// subnorm = true
 
 	default:
 		// add implicit top bit
@@ -124,8 +119,6 @@ func genericFtoa(dst []byte, val float64, fmt byte, prec, bitSize int) []byte {
 		var buf [32]byte
 		digs.d = buf[:]
 		ryuFtoaShortest(&digs, mant, exp-int(flt.mantbits), flt)
-		// TODO: uncomment below
-		// dragonboxFtoa(&digs, mant, exp-int(flt.mantbits), subnorm, flt)
 		ok = true
 		// Precision for shortest representation mode.
 		switch fmt {

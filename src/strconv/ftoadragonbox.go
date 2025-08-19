@@ -4,110 +4,113 @@
 
 package strconv
 
-import "math/bits"
+import (
+	"math"
+	"math/bits"
+)
 
-// normal_internval = {even, even}
-// shorter_interval = {true, true}
-
-func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, subnorm bool, flt *floatInfo) {
+func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
+	// first short path (denormalized and zero mantissa)
 	if mant == 0 {
 		d.nd, d.dp = 0, 0
 		return
 	}
 
+	// second short path (exact integer)
+	if exp <= 0 && bits.TrailingZeros64(mant) >= -exp {
+		mant >>= uint(-exp)
+		decMant, decExp := removeTrailingZeros64(mant, 0)
+		dragonboxDigits(d, decMant, decExp)
+		return
+	}
+
+	twoFc := mant * 2
 	binExp := exp
-	twoMant := mant * 2
 
-	if !subnorm {
-		// already adjusted
-		// binExp += flt.bias - int(flt.mantbits)
+	// shorter interval case
+	if !denorm && mant == (1<<mantBits64) {
+		minusK := floorLog10Pow2MinusLog10_4Over3(binExp)
+		beta := binExp + floorLog2Pow10(-minusK)
+		cache := getCache64(-minusK)
+		xi := computeLeftEndpointForShorterIntervalCase64(cache, beta)
+		zi := computeRightEndpointForShorterIntervalCase64(cache, beta)
 
-		if twoMant == 0 {
-			minusK := floorLog10Pow2MinusLog10Of4Over3(binExp)
-			beta := binExp + floorLog2Pow10(-minusK)
+		if !(binExp >= shorterIntervalLeftEndpointLowerThreshold64 &&
+			binExp <= shorterIntervalLeftEndpointUpperThreshold64) {
+			xi++
+		}
 
-			cache := getCache(-minusK)
-
-			xi := computeLeftEndpointForShorterIntervalCase(cache, beta, flt)
-			zi := computeRightEndpointForShorterIntervalCase(cache, beta, flt)
-
-			decMant := divideByPow10(zi, (((2<<flt.mantbits)+1)/3+1)*20, 1)
-
-			if decMant*10 >= xi {
-				decMant, decExp := removeTrailingZeros(decMant, minusK+1)
-				formatScientific(d, decMant, decExp)
-				return
-			}
-
-			decMant = computeRoundUpForShorterIntervalCase(cache, beta, flt)
-			preferRoundDown := decMant%2 != 0
-			lower, upper := shorterIntervalTieThresholds(flt)
-
-			if preferRoundDown && lower <= binExp && binExp <= upper {
-				decMant--
-			} else {
-				decMant++
-			}
-			formatScientific(d, decMant, minusK)
+		decMant := divideByPow10_64(zi, (((uint64(2)<<mantBits64)+1)/3+1)*20, 1)
+		if decMant*10 >= xi {
+			decMant, decExp := removeTrailingZeros64(decMant, minusK+1)
+			dragonboxDigits(d, decMant, decExp)
 			return
 		}
 
-		twoMant |= 1 << (flt.mantbits + 1)
-	} else {
-		minExp := flt.bias + 1
-		binExp = minExp - int(flt.mantbits)
+		decMant = computeRoundUpForShorterIntervalCase64(cache, beta)
+		preferRoundDown := decMant%2 != 0
+
+		if preferRoundDown &&
+			binExp >= shorterIntervalTieLowerThreshold64 &&
+			binExp <= shorterIntervalTieUpperThreshold64 {
+			decMant--
+		} else if decMant < xi {
+			decMant++
+		}
+		dragonboxDigits(d, decMant, minusK)
+		return
 	}
 
-	/******************************************************************************/
-	/* Step 1: Schubfach multiplier calculation.                                  */
-	/******************************************************************************/
-
-	kappa := floorLog10Pow2(int(flt.size)-int(flt.mantbits)-2) - 1
+	// normal interval case
+	// step 1: Schubfach multiplier calculation
+	const kappa = 2 // float64
+	// const kappa = 1 // float32
+	// kappa := FloorLog10Pow2(int(flt.Size)-int(mantBits64)-2) - 1
 	minusK := floorLog10Pow2(binExp) - kappa
 	beta := binExp + floorLog2Pow10(-minusK)
+	cache := getCache64(-minusK)
 
-	cache := getCache(-minusK)
+	deltaI := computeDelta64(cache, beta)
+	zIntPart, zIsInt := computeMul64(uint64(twoFc|1)<<beta, cache)
 
-	deltaI := computeDelta(cache, beta, flt)
-	zIntPart, zIsInt := computeMul(uint64(twoMant|1)<<beta, cache)
+	// step 2: try larger divisor
+	bigDivisor := computePower(uint64(10), kappa+1)
+	smallDivisor := computePower(uint64(10), kappa)
 
-	/******************************************************************************/
-	/* Step 2: Try larger divisor; remove trailing zeros if necessary.            */
-	/******************************************************************************/
-
-	bigDivisor := computePower(10, kappa+1)
-	smallDivisor := computePower(10, kappa)
-
-	decMant := divideByPow10(zIntPart, (2<<flt.mantbits)*bigDivisor-1, kappa+1)
+	decMant := divideByPow10_64(zIntPart, (uint64(2)<<mantBits64)*bigDivisor-1, kappa+1)
 	r := uint64(zIntPart - bigDivisor*decMant)
 
 	even := mant%2 == 0
+	includeLeftEndpoint := even
+	includeRightEndpoint := even
+
 	if r < deltaI {
-		if r == 0 && zIsInt && !even {
-			decMant--
-			r = bigDivisor
+		if r != 0 || !zIsInt || includeRightEndpoint {
+			decMant, decExp := removeTrailingZeros64(decMant, minusK+kappa+1)
+			dragonboxDigits(d, decMant, decExp)
+			return
 		}
-	} else if r <= deltaI {
-		xParity, xIsInt := computeMulParity(uint64(twoMant-1), cache, beta)
-		if xParity || (xIsInt && even) {
-			formatScientific(d, decMant, minusK+kappa)
+		decMant--
+		r = bigDivisor
+	} else if r == deltaI {
+		xParity, xIsInt := computeMulParity64(uint64(twoFc-1), cache, beta)
+		if xParity || (xIsInt && includeLeftEndpoint) {
+			decMant, decExp := removeTrailingZeros64(decMant, minusK+kappa+1)
+			dragonboxDigits(d, decMant, decExp)
 			return
 		}
 	}
 
-	/******************************************************************************/
-	/* Step 3: Find the significand with the smaller divisor.                     */
-	/******************************************************************************/
-
+	// step 3: find the significand with the smaller divisor
 	decMant *= 10
 	dist := uint64(r - (deltaI / 2) + (smallDivisor / 2))
 	approxYParity := ((dist ^ (smallDivisor / 2)) & 1) != 0
-	dist, divisible := checkDivisibilityAndDivideByPow10(dist, kappa, flt)
+	dist, divisible := checkDivisibilityAndDivideByPow10(dist, kappa)
 
 	decMant += dist
 
 	if divisible {
-		yParity, yIsInt := computeMulParity(twoMant, cache, beta)
+		yParity, yIsInt := computeMulParity64(twoFc, cache, beta)
 		if yParity != approxYParity {
 			decMant--
 		} else {
@@ -117,28 +120,129 @@ func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, subnorm bool, flt *flo
 			}
 		}
 	}
-	formatScientific(d, decMant, minusK+kappa)
+	dragonboxDigits(d, decMant, minusK+kappa)
 }
 
-func formatScientific(d *decimalSlice, mant uint64, exp int) {
-	if mant < 10 {
-		d.d = append(d.d, byte('0'+mant))
-		d.nd++
-	} else {
-		for mant >= 10 {
-			d.d = append(d.d, byte('0'+mant%10))
-			d.nd++
-			mant /= 10
+// TODO: this is almost an exact copy of dragonboxFtoa64
+func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
+	// first short path (denormalized and zero mantissa)
+	if mant == 0 {
+		d.nd, d.dp = 0, 0
+		return
+	}
+
+	// second short path (exact integer)
+	if exp <= 0 && bits.TrailingZeros32(mant) >= -exp {
+		mant >>= uint(-exp)
+		decMant, decExp := removeTrailingZeros32(mant, 0)
+		dragonboxDigits(d, uint64(decMant), decExp)
+		return
+	}
+
+	twoFc := mant * 2
+	binExp := exp
+
+	// shorter interval case
+	if !denorm && mant == (1<<mantBits32) {
+		minusK := floorLog10Pow2MinusLog10_4Over3(binExp)
+		beta := binExp + floorLog2Pow10(-minusK)
+		cache := getCache32(-minusK)
+		xi := computeLeftEndpointForShorterIntervalCase32(cache, beta)
+		zi := computeRightEndpointForShorterIntervalCase32(cache, beta)
+
+		if !(binExp >= shorterIntervalLeftEndpointLowerThreshold32 &&
+			binExp <= shorterIntervalLeftEndpointUpperThreshold32) {
+			xi++
 		}
-		d.d = append(d.d, byte('0'+mant))
-		d.nd++
-		// reverse the digits
-		for i, j := 0, d.nd-2; i < j; i, j = i+1, j-1 {
-			d.d[i], d.d[j] = d.d[j], d.d[i]
+
+		decMant := divideByPow10_32(zi, (((uint32(2)<<mantBits32)+1)/3+1)*20, 1)
+		if decMant*10 >= xi {
+			decMant, decExp := removeTrailingZeros32(decMant, minusK+1)
+			dragonboxDigits(d, uint64(decMant), decExp)
+			return
+		}
+
+		decMant = computeRoundUpForShorterIntervalCase32(cache, beta)
+		preferRoundDown := decMant%2 != 0
+
+		if preferRoundDown &&
+			binExp >= shorterIntervalTieLowerThreshold32 &&
+			binExp <= shorterIntervalTieUpperThreshold32 {
+			decMant--
+		} else if decMant < xi {
+			decMant++
+		}
+		dragonboxDigits(d, uint64(decMant), minusK)
+		return
+	}
+
+	// normal interval case
+	// step 1: Schubfach multiplier calculation
+	// const kappa = 2 // float64
+	const kappa = 1 // float32
+	// kappa := FloorLog10Pow2(int(flt.Size)-int(mantBits64)-2) - 1
+	minusK := floorLog10Pow2(binExp) - kappa
+	beta := binExp + floorLog2Pow10(-minusK)
+	cache := getCache32(-minusK)
+
+	deltaI := computeDelta32(cache, beta)
+	zIntPart, zIsInt := computeMul32(uint32(twoFc|1)<<beta, cache)
+
+	// step 2: try larger divisor
+	bigDivisor := computePower(uint32(10), kappa+1)
+	smallDivisor := computePower(uint32(10), kappa)
+
+	decMant := divideByPow10_32(zIntPart, (uint32(2)<<mantBits32)*bigDivisor-1, kappa+1)
+	r := uint32(zIntPart - bigDivisor*decMant)
+
+	even := mant%2 == 0
+	includeLeftEndpoint := even
+	includeRightEndpoint := even
+
+	if r < deltaI {
+		if r != 0 || !zIsInt || includeRightEndpoint {
+			decMant, decExp := removeTrailingZeros32(decMant, minusK+kappa+1)
+			dragonboxDigits(d, uint64(decMant), decExp)
+			return
+		}
+		decMant--
+		r = bigDivisor
+	} else if r == deltaI {
+		xParity, xIsInt := computeMulParity32(uint32(twoFc-1), cache, beta)
+		if xParity || (xIsInt && includeLeftEndpoint) {
+			decMant, decExp := removeTrailingZeros32(decMant, minusK+kappa+1)
+			dragonboxDigits(d, uint64(decMant), decExp)
+			return
 		}
 	}
-	// adjust exponent
-	d.dp = exp + 1 // TODO: is this ok?
+
+	// step 3: find the significand with the smaller divisor
+	decMant *= 10
+	dist := uint32(r - (deltaI / 2) + (smallDivisor / 2))
+	approxYParity := ((dist ^ (smallDivisor / 2)) & 1) != 0
+	dist, divisible := checkDivisibilityAndDivideByPow10(dist, kappa)
+
+	decMant += dist
+
+	if divisible {
+		yParity, yIsInt := computeMulParity32(twoFc, cache, beta)
+		if yParity != approxYParity {
+			decMant--
+		} else {
+			preferRoundDown := decMant%2 != 0
+			if preferRoundDown && yIsInt {
+				decMant--
+			}
+		}
+	}
+	dragonboxDigits(d, uint64(decMant), minusK+kappa)
+}
+
+func dragonboxDigits(d *decimalSlice, mant uint64, exp int) {
+	_, str := formatBits(d.d, mant, 10, false, false)
+	d.d = []byte(str)
+	d.nd = len(d.d)
+	d.dp = d.nd + exp // adjusts decimal point
 }
 
 type uint128 struct {
@@ -146,9 +250,9 @@ type uint128 struct {
 }
 
 func uadd128(u uint128, n uint64) uint128 {
-	sum := u.lo + n
-	if sum < u.lo { // uint always wraps around
-		u.hi += 1
+	sum := uint64(u.lo + n)
+	if sum < u.lo {
+		u.hi++ // lo wrapped around
 	}
 	u.lo = sum
 	return u
@@ -156,6 +260,20 @@ func uadd128(u uint128, n uint64) uint128 {
 
 func umul64(x, y uint32) uint64 {
 	return uint64(x) * uint64(y)
+}
+
+func umul96Upper64(x uint32, y uint64) uint64 {
+	yh := uint32(y >> 32)
+	yl := uint32(y)
+
+	xyh := umul64(x, yh)
+	xyl := umul64(x, yl)
+
+	return xyh + (xyl >> 32)
+}
+
+func umul96Lower64(x uint32, y uint64) uint64 {
+	return uint64(uint64(x) * y)
 }
 
 func umul128(x, y uint64) uint128 {
@@ -169,7 +287,7 @@ func umul128(x, y uint64) uint128 {
 	ad := umul64(a, d)
 	bd := umul64(b, d)
 
-	intermediate := (bd >> 32) + uint64(uint32(ad)) + uint64(uint32(bc))
+	intermediate := uint64(bd>>32) + uint64(uint32(ad)) + uint64(uint32(bc))
 
 	hi := ac + (intermediate >> 32) + (ad >> 32) + (bc >> 32)
 	lo := (intermediate << 32) + uint64(uint32(bd))
@@ -201,84 +319,143 @@ func umul192Upper128(x uint64, y uint128) uint128 {
 func umul192Lower128(x uint64, y uint128) uint128 {
 	high := x * y.hi
 	highLow := umul128(x, y.lo)
-	return uint128{(high + highLow.hi) & 0xffffffffffffffff, highLow.lo}
+	return uint128{uint64(high + highLow.hi), highLow.lo}
 }
 
-func computeMul(u uint64, cache uint128) (intPart uint64, isInt bool) {
+func computeMul64(u uint64, cache uint128) (intPart uint64, isInt bool) {
 	r := umul192Upper128(u, cache)
 	intPart = r.hi
 	isInt = r.lo == 0
 	return
 }
 
-func computeMulParity(twoF uint64, cache uint128, beta int) (parity bool, isInt bool) {
+func computeMul32(u uint32, cache uint64) (intPart uint32, isInt bool) {
+	r := umul96Upper64(u, cache)
+	intPart = uint32(r >> 32)
+	isInt = uint32(r) == 0
+	return
+}
+
+func computeMulParity64(twoF uint64, cache uint128, beta int) (parity bool, isInt bool) {
 	if beta < 1 || beta >= 64 {
-		panic("computeMulParity: beta out of range")
+		panic("computeMulParity64: beta out of range")
 	}
 
 	r := umul192Lower128(twoF, cache)
 	parity = ((r.hi >> (64 - beta)) & 1) != 0
-	isInt = (((r.hi << beta) & 0xFFFFFFFFFFFFFFFF) | (r.lo >> (64 - beta))) == 0
+	isInt = ((uint64(r.hi << beta)) | (r.lo >> (64 - beta))) == 0
 	return
 }
 
-func computeDelta(cache uint128, beta int, flt *floatInfo) uint64 {
-	return cache.hi >> (int(flt.size) - 1 - beta)
+func computeMulParity32(twoF uint32, cache uint64, beta int) (parity bool, isInt bool) {
+	if beta < 1 || beta > 32 {
+		panic("computeMulParity32: beta out of range")
+	}
+
+	r := umul96Lower64(twoF, cache)
+	parity = ((r >> (64 - beta)) & 1) != 0
+	isInt = uint32(r>>(32-beta)) == 0
+	return
+}
+
+func computeDelta64(cache uint128, beta int) uint64 {
+	return cache.hi >> (cacheBits64/2 - 1 - beta)
+}
+
+func computeDelta32(cache uint64, beta int) uint32 {
+	return uint32(cache >> (cacheBits32 - 1 - beta))
 }
 
 // computes a^k by squaring
-func computePower(a uint64, k int) uint64 {
+func computePower[T uint32 | uint64](a T, k int) T {
+	// TODO: k should be known at compile time
 	if k < 0 {
 		panic("computePower: exponent must be non-negative")
 	}
-	p := uint64(1)
-	e := k
-	for e > 0 {
-		if e%2 == 1 {
+
+	p := T(1)
+	for k > 0 {
+		if k%2 == 1 {
 			p *= a
 		}
-		e /= 2
+		k /= 2
 		a *= a
 	}
 	return p
 }
 
 // divides n by 10^k
-func divideByPow10(n, nMax uint64, k int) uint64 {
-	// TODO: extract special cases into individual funcs
+func divideByPow10_64(n, nMax uint64, k int) uint64 {
+	// TODO: k and nMax should be known at compile time
 	switch {
 	case k == 1 && nMax <= 4611686018427387908:
 		// special case: divide by 10
-		return umul128(n, 1844674407370955162).hi
+		return umul128Upper64(n, 1844674407370955162)
 	case k == 3 && nMax <= 15534100272597517998:
 		// special case: divide by 1000
-		return umul128(n, 4722366482869645214).hi >> 8
+		return umul128Upper64(n, 4722366482869645214) >> 8
 	default:
-		return n / computePower(uint64(k), 10)
+		return n / computePower(uint64(10), k)
 	}
 }
 
-func checkDivisibilityAndDivideByPow10(n uint64, k int, flt *floatInfo) (divided uint64, ok bool) {
-	if k+1 > floorLog10Pow2(int(flt.size)) {
-		panic("checkDivisibilityAndDivideByPow10: k out of range")
+// divides n by 10^k
+func divideByPow10_32(n, nMax uint32, k int) uint32 {
+	// TODO: k and nMax should be known at compile time
+	switch {
+	case k == 1 && nMax <= 1073741828:
+		// special case: divide by 10
+		return uint32(umul64(n, 429496730) >> 32)
+	case k == 2:
+		// special case: divide by 100
+		return uint32(umul64(n, 1374389535) >> 37)
+	default:
+		return n / computePower(uint32(10), k)
 	}
-	if n > computePower(10, k+1) {
+}
+
+func checkDivisibilityAndDivideByPow10[T uint32 | uint64](n T, k int) (divided T, ok bool) {
+	if n > computePower(T(10), k+1) {
 		panic("checkDivisibilityAndDivideByPow10: n exceeds allowed value")
 	}
 
 	divideMagicNumbers := [2]uint32{6554, 656}
 	magicNumber := divideMagicNumbers[k-1]
-	prod := uint32(n * uint64(magicNumber))
+	prod := uint32(n * T(magicNumber))
 
-	mask := uint32((1 << 16) - 1)
+	mask := uint32((uint32(1) << 16) - 1)
 	result := (prod & mask) < magicNumber
 
-	n = uint64(prod >> 16)
+	n = T(prod >> 16)
 	return n, result
 }
 
+func countFactors[T uint32 | uint64](n T, a int) int {
+	if a <= 1 {
+		panic("CountFactors: a must be > 1")
+	}
+
+	c := 0
+	for n%T(a) == 0 {
+		n /= T(a)
+		c++
+	}
+	return c
+}
+
+func floorLog2(n uint64) int {
+	// TODO: only used for compile-time constants
+	// TODO: can be optimized by inlining constant values instead
+	count := -1
+	for n != 0 {
+		count++
+		n >>= 1
+	}
+	return count
+}
+
 func floorLog10Pow2(e int) int {
-	if e < -2620 || e > 2620 {
+	if e < -2620 || 2620 < e {
 		panic("floorLog10Pow2: e out of range")
 	}
 	return (e * 315653) >> 20
@@ -286,92 +463,177 @@ func floorLog10Pow2(e int) int {
 
 func floorLog2Pow10(e int) int {
 	// Formula itself holds on [-4003,4003]; restricted to [-1233,1233] to avoid overflow
-	if e < -1233 || e > 1233 {
+	if e < -1233 || 1233 < e {
 		panic("floorLog2Pow10: e out of range")
 	}
 	return (e * 1741647) >> 19
 }
 
-func floorLog10Pow2MinusLog10Of4Over3(e int) int {
-	if e < -2985 || e > 2936 {
-		panic("floorLog10Pow2MinusLog10Of4Over3: e out of range")
+func floorLog10Pow2MinusLog10_4Over3(e int) int {
+	if e < -2985 || 2936 < e {
+		panic("floorLog10Pow2MinusLog10_4Over3: e out of range")
 	}
 	return (e*631305 - 261663) >> 21
 }
 
 func floorLog5Pow2(e int) int {
-	if e < -1831 || e > 1831 {
+	if e < -1831 || 1831 < e {
 		panic("floorLog5Pow2: e out of range")
 	}
 	return (e * 225799) >> 19
 }
 
-func floorLog5Pow2MinusLog5Of3(e int) int {
-	if e < -3543 || e > 2427 {
-		panic("floorLog5Pow2MinusLog5Of3: e out of range")
+func floorLog5Pow2MinusLog5_3(e int) int {
+	if e < -3543 || 2427 < e {
+		panic("floorLog5Pow2MinusLog5_3: e out of range")
 	}
 	return (e*451597 - 715764) >> 20
 }
 
-func shorterIntervalTieThresholds(flt *floatInfo) (lower, upper int) {
-	lower = -floorLog5Pow2MinusLog5Of3(int(flt.mantbits)+4) - 2 - int(flt.mantbits)
-	upper = -floorLog5Pow2(int(flt.mantbits)+2) - 2 - int(flt.mantbits)
-	return
+const (
+	cacheBits64 = 128
+	cacheBits32 = 64
+	mantBits64  = 52
+	mantBits32  = 23
+)
+
+var (
+	shorterIntervalLeftEndpointLowerThreshold64 = 2
+	shorterIntervalLeftEndpointUpperThreshold64 = 2 +
+		floorLog2(computePower(uint64(10), countFactors((uint64(1)<<(mantBits64+2))-1, 5)+1)/3)
+
+	shorterIntervalLeftEndpointLowerThreshold32 = 2
+	shorterIntervalLeftEndpointUpperThreshold32 = 2 +
+		floorLog2(uint64(computePower(uint32(10), countFactors((uint32(1)<<(mantBits32+2))-1, 5)+1)/3))
+
+	shorterIntervalTieLowerThreshold64 = -floorLog5Pow2MinusLog5_3(mantBits64+4) - 2 - mantBits64
+	shorterIntervalTieUpperThreshold64 = -floorLog5Pow2(mantBits64+2) - 2 - mantBits64
+
+	shorterIntervalTieLowerThreshold32 = -floorLog5Pow2MinusLog5_3(mantBits32+4) - 2 - mantBits32
+	shorterIntervalTieUpperThreshold32 = -floorLog5Pow2(mantBits32+2) - 2 - mantBits32
+)
+
+func computeLeftEndpointForShorterIntervalCase64(cache uint128, beta int) uint64 {
+	return (cache.hi - (cache.hi >> (mantBits64 + 2))) >>
+		(cacheBits64/2 - mantBits64 - 1 - beta)
 }
 
-func computeLeftEndpointForShorterIntervalCase(cache uint128, beta int, flt *floatInfo) uint64 {
-	return (cache.hi - (cache.hi >> (flt.mantbits + 2))) >>
-		(int(flt.size) - int(flt.mantbits) - 1 - beta)
+func computeLeftEndpointForShorterIntervalCase32(cache uint64, beta int) uint32 {
+	return uint32(cache-(cache>>(mantBits32+2))) >>
+		(cacheBits32 - mantBits32 - 1 - beta)
 }
 
-func computeRightEndpointForShorterIntervalCase(cache uint128, beta int, flt *floatInfo) uint64 {
-	return (cache.hi + (cache.hi >> (flt.mantbits + 1))) >>
-		(int(flt.size) - int(flt.mantbits) - 1 - beta)
+func computeRightEndpointForShorterIntervalCase64(cache uint128, beta int) uint64 {
+	return (cache.hi + (cache.hi >> (mantBits64 + 1))) >>
+		(cacheBits64/2 - mantBits64 - 1 - beta)
 }
 
-func computeRoundUpForShorterIntervalCase(cache uint128, beta int, flt *floatInfo) uint64 {
-	return (cache.hi>>(int(flt.size)-int(flt.mantbits)-2-beta) + 1) / 2
+func computeRightEndpointForShorterIntervalCase32(cache uint64, beta int) uint32 {
+	return uint32(cache+(cache>>(mantBits32+1))) >>
+		(cacheBits32 - mantBits32 - 1 - beta)
 }
 
-// returns 1 if a < b, 0 otherwise
-func ult64(a, b uint64) int {
-	// a-b will underflow if a < b
-	return int((a - b) >> 63)
+func computeRoundUpForShorterIntervalCase64(cache uint128, beta int) uint64 {
+	return (cache.hi>>(cacheBits64/2-mantBits64-2-beta) + 1) / 2
 }
 
-// branchless if else
-func uifelse64(cond int, a, b uint64) uint64 {
-	// mask is 0 if cond==0, 0xFFFFFFFFFFFFFFFF if cond==1
-	mask := uint64(-cond)
-	return (a & mask) | (b & ^mask)
+func computeRoundUpForShorterIntervalCase32(cache uint64, beta int) uint32 {
+	return uint32(cache>>(cacheBits32-mantBits32-2-beta)+1) / 2
 }
 
-func removeTrailingZeros(mant uint64, exp int) (uint64, int) {
+// removes trailing zeros in decimal (not binary)
+func removeTrailingZeros64(mant uint64, exp int) (uint64, int) {
 	r := bits.RotateLeft64(mant*28999941890838049, -8)
-	b := ult64(r, 184467440738)
-	s := b
-	mant = uifelse64(b, r, mant)
+	b := r < 184467440738
+	s := 0
+	if b { // TODO: make this branchless
+		s++
+		mant = r
+	}
 
 	r = bits.RotateLeft64(mant*182622766329724561, -4)
-	b = ult64(r, 1844674407370956)
-	s = s*2 + b
-	mant = uifelse64(b, r, mant)
+	b = r < 1844674407370956
+	s = s * 2
+	if b {
+		s++
+		mant = r
+	}
 
 	r = bits.RotateLeft64(mant*10330176681277348905, -2)
-	b = ult64(r, 184467440737095517)
-	s = s*2 + b
-	mant = uifelse64(b, r, mant)
+	b = r < 184467440737095517
+	s = s * 2
+	if b {
+		s++
+		mant = r
+	}
 
 	r = bits.RotateLeft64(mant*14757395258967641293, -1)
-	b = ult64(r, 1844674407370955162)
-	s = s*2 + b
-	mant = uifelse64(b, r, mant)
+	b = r < 1844674407370955162
+	s = s * 2
+	if b {
+		s++
+		mant = r
+	}
 
 	exp += s
 	return mant, exp
 }
 
-var cache = [619]uint128{
+// removes trailing zeros in decimal (not binary)
+func removeTrailingZeros32(mant uint32, exp int) (uint32, int) {
+	r := bits.RotateLeft32(mant*184254097, -4)
+	b := r < 429497
+	s := 0
+	if b { // TODO: make this branchless
+		s++
+		mant = r
+	}
+
+	r = bits.RotateLeft32(mant*42949673, -2)
+	b = r < 42949673
+	s = s * 2
+	if b {
+		s++
+		mant = r
+	}
+
+	r = bits.RotateLeft32(mant*1288490189, -1)
+	b = r < 429496730
+	s = s * 2
+	if b {
+		s++
+		mant = r
+	}
+
+	exp += s
+	return mant, exp
+}
+
+const (
+	cacheMinK64 = -292
+	cacheMaxK64 = 326
+
+	cacheMinK32 = -31
+	cacheMaxK32 = 46
+)
+
+func getCache64(k int) uint128 {
+	if k < cacheMinK64 || k > cacheMaxK64 {
+		panic("getCache64: k out of range")
+	}
+
+	return cache64[k-cacheMinK64]
+}
+
+func getCache32(k int) uint64 {
+	if k < cacheMinK32 || k > cacheMaxK32 {
+		panic("getCache32: k out of range")
+	}
+
+	return cache32[k-cacheMinK32]
+}
+
+var cache64 = [619]uint128{
 	{0xff77b1fcbebcdc4f, 0x25e8e89c13bb0f7b},
 	{0x9faacf3df73609b1, 0x77b191618c54e9ad},
 	{0xc795830d75038c1d, 0xd59df5b9ef6a2418},
@@ -990,16 +1252,116 @@ var cache = [619]uint128{
 	{0xfcf62c1dee382c42, 0x46729e03dd9ed7b6},
 	{0x9e19db92b4e31ba9, 0x6c07a2c26a8346d2},
 	{0xc5a05277621be293, 0xc7098b7305241886},
-	{0xf70867153aa2db38, 0xb8cbee4fc66d1ea8}}
+	{0xf70867153aa2db38, 0xb8cbee4fc66d1ea8},
+}
 
-const (
-	cacheMinK = -292
-	cacheMaxK = 326
-)
+var cache32 = [78]uint64{
+	0x81ceb32c4b43fcf5, 0xa2425ff75e14fc32,
+	0xcad2f7f5359a3b3f, 0xfd87b5f28300ca0e,
+	0x9e74d1b791e07e49, 0xc612062576589ddb,
+	0xf79687aed3eec552, 0x9abe14cd44753b53,
+	0xc16d9a0095928a28, 0xf1c90080baf72cb2,
+	0x971da05074da7bef, 0xbce5086492111aeb,
+	0xec1e4a7db69561a6, 0x9392ee8e921d5d08,
+	0xb877aa3236a4b44a, 0xe69594bec44de15c,
+	0x901d7cf73ab0acda, 0xb424dc35095cd810,
+	0xe12e13424bb40e14, 0x8cbccc096f5088cc,
+	0xafebff0bcb24aaff, 0xdbe6fecebdedd5bf,
+	0x89705f4136b4a598, 0xabcc77118461cefd,
+	0xd6bf94d5e57a42bd, 0x8637bd05af6c69b6,
+	0xa7c5ac471b478424, 0xd1b71758e219652c,
+	0x83126e978d4fdf3c, 0xa3d70a3d70a3d70b,
+	0xcccccccccccccccd, 0x8000000000000000,
+	0xa000000000000000, 0xc800000000000000,
+	0xfa00000000000000, 0x9c40000000000000,
+	0xc350000000000000, 0xf424000000000000,
+	0x9896800000000000, 0xbebc200000000000,
+	0xee6b280000000000, 0x9502f90000000000,
+	0xba43b74000000000, 0xe8d4a51000000000,
+	0x9184e72a00000000, 0xb5e620f480000000,
+	0xe35fa931a0000000, 0x8e1bc9bf04000000,
+	0xb1a2bc2ec5000000, 0xde0b6b3a76400000,
+	0x8ac7230489e80000, 0xad78ebc5ac620000,
+	0xd8d726b7177a8000, 0x878678326eac9000,
+	0xa968163f0a57b400, 0xd3c21bcecceda100,
+	0x84595161401484a0, 0xa56fa5b99019a5c8,
+	0xcecb8f27f4200f3a, 0x813f3978f8940985,
+	0xa18f07d736b90be6, 0xc9f2c9cd04674edf,
+	0xfc6f7c4045812297, 0x9dc5ada82b70b59e,
+	0xc5371912364ce306, 0xf684df56c3e01bc7,
+	0x9a130b963a6c115d, 0xc097ce7bc90715b4,
+	0xf0bdc21abb48db21, 0x96769950b50d88f5,
+	0xbc143fa4e250eb32, 0xeb194f8e1ae525fe,
+	0x92efd1b8d0cf37bf, 0xb7abc627050305ae,
+	0xe596b7b0c643c71a, 0x8f7e32ce7bea5c70,
+	0xb35dbf821ae4f38c, 0xe0352f62a19e306f,
+}
 
-func getCache(k int) uint128 {
-	if k < cacheMinK || k > cacheMaxK {
-		panic("getCache: k out of range")
+// utility function for fuzz testing
+func CompareDragonboxFto64AndRyuShortestFtoa(
+	bitSize int, val32 float32, val64 float64, errorFunc func(string, ...any)) {
+	var val float64
+	var bits uint64
+	var flt *floatInfo
+
+	switch bitSize {
+	case 32:
+		val = float64(val32)
+		bits = uint64(math.Float32bits(val32))
+		flt = &float32info
+	case 64:
+		val = val64
+		bits = math.Float64bits(val64)
+		flt = &float64info
+	default:
+		panic("CompareDragonboxRyuShortestFtoa64: illegal bitSize")
 	}
-	return cache[k-cacheMinK]
+
+	neg := bits>>(flt.expbits+flt.mantbits) != 0
+	exp := int(bits>>flt.mantbits) & (1<<flt.expbits - 1)
+	mant := bits & (uint64(1)<<flt.mantbits - 1)
+	denorm := false
+
+	switch exp {
+	case 1<<flt.expbits - 1:
+		// Inf, NaN
+		return // ignore for testing
+
+	case 0:
+		// denormalized
+		exp++
+		denorm = true
+
+	default:
+		// add implicit top bit
+		mant |= uint64(1) << flt.mantbits
+	}
+	exp += flt.bias
+
+	var digs1 decimalSlice
+	var dbuf1 [32]byte
+	digs1.d = dbuf1[:]
+	switch bitSize {
+	case 32:
+		dragonboxFtoa32(&digs1, uint32(mant), exp-int(flt.mantbits), denorm)
+	case 64:
+		dragonboxFtoa64(&digs1, mant, exp-int(flt.mantbits), denorm)
+	}
+
+	var digs2 decimalSlice
+	var dbuf2 [32]byte
+	digs2.d = dbuf2[:]
+	ryuFtoaShortest(&digs2, mant, exp-int(flt.mantbits), flt)
+
+	var fbuf1 [32]byte
+	prec1 := max(digs1.nd-1, 0)
+	res1 := formatDigits(fbuf1[:0], true, neg, digs1, prec1, 'e')
+
+	var fbuf2 [32]byte
+	prec2 := max(digs2.nd-1, 0)
+	res2 := formatDigits(fbuf2[:0], true, neg, digs2, prec2, 'e')
+
+	if string(res1) != string(res2) {
+		errorFunc("Mismatch!\nInput: %e\nResult: %s %s", val, res1, res2)
+	}
 }
