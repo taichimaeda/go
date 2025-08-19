@@ -12,7 +12,7 @@ import (
 )
 
 func randomFloat32FullRange() float32 {
-	bits := rand.Uint32() // random 64-bit pattern
+	bits := rand.Uint32() // random 32-bit pattern
 	return math.Float32frombits(bits)
 }
 
@@ -32,15 +32,31 @@ func TestFtoaDragonbox(t *testing.T) {
 		val32 := randomFloat32FullRange()
 		val64 := randomFloat64FullRange()
 
-		if err := CompareDragonboxFtoaAndRyuShortestFtoa(bitSize, val32, val64); err != nil {
+		if err := CompareDragonboxFtoaAndRyuFtoaShortest(bitSize, val32, val64); err != nil {
 			t.Errorf("Mismatch:\nInput: %f\nRyu output: %s\nDragonbox output: %s",
 				err.Val, err.RyuOutput, err.DragonboxOutput)
 		}
 	}
 }
 
+// TODO:
+// dragonbox is slightly slower (94ns vs 72ns) with the current impl
+// heap allocation in systemstack is taking more time than cumulative time in BenchmarkDragonboxFtoa
+// we need to remove string/byte conversion in dragonboxDigits
+
 func BenchmarkDragonboxFtoa(b *testing.B) {
-	for b.Loop() {
+	// prepare inputs in advance
+	// to prevent repeated calls to StartTimer/StopTimer in the loop
+	b.StopTimer()
+
+	type input struct {
+		bitSize int
+		val32   float32
+		val64   float64
+	}
+
+	tests := make([]input, b.N)
+	for i := 0; i < b.N; i++ {
 		var bitSize int
 		if rand.Intn(2) == 0 {
 			bitSize = 32
@@ -49,13 +65,29 @@ func BenchmarkDragonboxFtoa(b *testing.B) {
 		}
 		val32 := randomFloat32FullRange()
 		val64 := randomFloat64FullRange()
+		tests[i] = input{bitSize, val32, val64}
+	}
 
-		RunDragonboxFtoa(bitSize, val32, val64)
+	b.StartTimer()
+
+	for _, tt := range tests {
+		RunDragonboxFtoa(tt.bitSize, tt.val32, tt.val64)
 	}
 }
 
 func BenchmarkRyuFtoaShortest(b *testing.B) {
-	for b.Loop() {
+	// prepare inputs in advance
+	// to prevent repeated calls to StartTimer/StopTimer in the loop
+	b.StopTimer()
+
+	type input struct {
+		bitSize int
+		val32   float32
+		val64   float64
+	}
+
+	tests := make([]input, b.N)
+	for i := 0; i < b.N; i++ {
 		var bitSize int
 		if rand.Intn(2) == 0 {
 			bitSize = 32
@@ -64,7 +96,12 @@ func BenchmarkRyuFtoaShortest(b *testing.B) {
 		}
 		val32 := randomFloat32FullRange()
 		val64 := randomFloat64FullRange()
+		tests[i] = input{bitSize, val32, val64}
+	}
 
-		RunRyuFtoaShortest(bitSize, val32, val64)
+	b.StartTimer()
+
+	for _, tt := range tests {
+		RunRyuFtoaShortest(tt.bitSize, tt.val32, tt.val64)
 	}
 }

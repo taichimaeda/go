@@ -84,6 +84,8 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	includeLeftEndpoint := even
 	includeRightEndpoint := even
 
+	// adjusted control flow from reference impl
+	// but this may make code harder to understand
 	if r < deltaI {
 		if r != 0 || !zIsInt || includeRightEndpoint {
 			decMant, decExp := removeTrailingZeros64(decMant, minusK+kappa+1)
@@ -199,6 +201,8 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 	includeLeftEndpoint := even
 	includeRightEndpoint := even
 
+	// adjusted control flow from reference impl
+	// but this may make code harder to understand
 	if r < deltaI {
 		if r != 0 || !zIsInt || includeRightEndpoint {
 			decMant, decExp := removeTrailingZeros32(decMant, minusK+kappa+1)
@@ -1355,7 +1359,7 @@ func newTestInfo(bitSize int, val32 float32, val64 float64) (testInfo, bool) {
 }
 
 // utility function for fuzz testing
-func CompareDragonboxFtoaAndRyuShortestFtoa(bitSize int, val32 float32, val64 float64) *errorInfo {
+func CompareDragonboxFtoaAndRyuFtoaShortest(bitSize int, val32 float32, val64 float64) *errorInfo {
 	test, ok := newTestInfo(bitSize, val32, val64)
 	if !ok {
 		return nil
