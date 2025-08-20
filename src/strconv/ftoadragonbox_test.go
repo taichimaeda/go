@@ -24,7 +24,7 @@ func randomFloat64FullRange() float64 {
 }
 
 // fuzz test against Ryu
-func TestFtoaDragonbox(t *testing.T) {
+func TestRunFtoaDragonbox(t *testing.T) {
 	const iter = 100000
 
 	for i := 0; i < iter; i++ {
@@ -48,7 +48,7 @@ func TestFtoaDragonbox(t *testing.T) {
 	}
 }
 
-func BenchmarkDragonboxFtoaRandomBits(b *testing.B) {
+func BenchmarkRunDragonboxFtoaRandomBits(b *testing.B) {
 	const iter = 100000
 	var total1, total2 time.Duration
 
@@ -78,7 +78,7 @@ func BenchmarkDragonboxFtoaRandomBits(b *testing.B) {
 	b.Logf("Duration:\nDragonbox: %d\nRyu: %d", total1, total2)
 }
 
-func BenchmarkDragonboxFtoaRandomDigits(b *testing.B) {
+func BenchmarkRunDragonboxFtoaRandomDigits(b *testing.B) {
 	const iter = 100000
 	var total1, total2 time.Duration
 
@@ -112,4 +112,80 @@ func BenchmarkDragonboxFtoaRandomDigits(b *testing.B) {
 	}
 
 	b.Logf("Duration:\nDragonbox: %d\nRyu: %d", total1, total2)
+}
+
+func BenchmarkProfileDragonboxFtoa(b *testing.B) {
+	const iter = 100000
+
+	b.StopTimer()
+
+	type testcase struct {
+		val     float64
+		bitSize int
+	}
+
+	tests := make([]testcase, iter)
+	for i := 0; i < iter; i++ {
+		// val := randomFloat64FullRange()
+		// bitSize := 64
+
+		var val float64
+		var bitSize int
+		switch rand.Intn(2) {
+		case 0:
+			val = float64(randomFloat32FullRange())
+			bitSize = 32
+		case 1:
+			val = randomFloat64FullRange()
+			bitSize = 64
+		}
+
+		tests[i] = testcase{val, bitSize}
+	}
+
+	b.StartTimer()
+
+	for b.Loop() {
+		for _, tt := range tests {
+			ProfileDragonboxFtoa(tt.val, tt.bitSize)
+		}
+	}
+}
+
+func BenchmarkProfileRyuFtoaShortest(b *testing.B) {
+	const iter = 100000
+
+	b.StopTimer()
+
+	type testcase struct {
+		val     float64
+		bitSize int
+	}
+
+	tests := make([]testcase, iter)
+	for i := 0; i < iter; i++ {
+		// val := randomFloat64FullRange()
+		// bitSize := 64
+
+		var val float64
+		var bitSize int
+		switch rand.Intn(2) {
+		case 0:
+			val = float64(randomFloat32FullRange())
+			bitSize = 32
+		case 1:
+			val = randomFloat64FullRange()
+			bitSize = 64
+		}
+
+		tests[i] = testcase{val, bitSize}
+	}
+
+	b.StartTimer()
+
+	for b.Loop() {
+		for _, tt := range tests {
+			ProfileRyuFtoaShortest(tt.val, tt.bitSize)
+		}
+	}
 }

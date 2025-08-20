@@ -1191,3 +1191,38 @@ func RunRyuFtoaShortest(val float64, bitSize int) (string, time.Duration) {
 
 	return output, elapsed
 }
+
+// utility function for profiling
+func ProfileDragonboxFtoa(val float64, bitSize int) {
+	test, ok := newTestInfo(val, bitSize)
+	if !ok {
+		return
+	}
+
+	mant := test.mant
+	exp := test.exp
+	flt := test.flt
+	denorm := test.denorm
+
+	var digs decimalSlice
+	var dbuf [32]byte
+	digs.d = dbuf[:]
+	dragonboxFtoa(&digs, mant, exp-int(flt.mantbits), denorm, bitSize)
+}
+
+// utility function for profiling
+func ProfileRyuFtoaShortest(val float64, bitSize int) {
+	test, ok := newTestInfo(val, bitSize)
+	if !ok {
+		return
+	}
+
+	mant := test.mant
+	exp := test.exp
+	flt := test.flt
+
+	var digs decimalSlice
+	var dbuf [32]byte
+	digs.d = dbuf[:]
+	ryuFtoaShortest(&digs, mant, exp-int(flt.mantbits), flt)
+}
