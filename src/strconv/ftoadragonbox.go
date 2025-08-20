@@ -9,6 +9,15 @@ import (
 	"math/bits"
 )
 
+func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, denorm bool, bitSize int) {
+	switch bitSize {
+	case 32:
+		dragonboxFtoa32(d, uint32(mant), exp, denorm)
+	case 64:
+		dragonboxFtoa64(d, mant, exp, denorm)
+	}
+}
+
 func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	// first short path (denormalized and zero mantissa)
 	if mant == 0 {
@@ -65,7 +74,6 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	// step 1: Schubfach multiplier calculation
 	const kappa = 2 // float64
 	// const kappa = 1 // float32
-	// kappa := FloorLog10Pow2(int(flt.Size)-int(mantBits64)-2) - 1
 	minusK := floorLog10Pow2(binExp) - kappa
 	beta := binExp + floorLog2Pow10(-minusK)
 	cache := getCache64(-minusK)
@@ -74,8 +82,8 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	zIntPart, zIsInt := computeMul64(uint64(twoFc|1)<<beta, cache)
 
 	// step 2: try larger divisor
-	bigDivisor := computePower(uint64(10), kappa+1)
-	smallDivisor := computePower(uint64(10), kappa)
+	const bigDivisor = 1000
+	const smallDivisor = 100
 
 	decMant := divideByPow10_64(zIntPart, (uint64(2)<<mantBits64)*bigDivisor-1, kappa+1)
 	r := uint64(zIntPart - bigDivisor*decMant)
@@ -182,7 +190,6 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 	// step 1: Schubfach multiplier calculation
 	// const kappa = 2 // float64
 	const kappa = 1 // float32
-	// kappa := FloorLog10Pow2(int(flt.Size)-int(mantBits64)-2) - 1
 	minusK := floorLog10Pow2(binExp) - kappa
 	beta := binExp + floorLog2Pow10(-minusK)
 	cache := getCache32(-minusK)
@@ -191,8 +198,8 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 	zIntPart, zIsInt := computeMul32(uint32(twoFc|1)<<beta, cache)
 
 	// step 2: try larger divisor
-	bigDivisor := computePower(uint32(10), kappa+1)
-	smallDivisor := computePower(uint32(10), kappa)
+	const bigDivisor = 100
+	const smallDivisor = 10
 
 	decMant := divideByPow10_32(zIntPart, (uint32(2)<<mantBits32)*bigDivisor-1, kappa+1)
 	r := uint32(zIntPart - bigDivisor*decMant)
@@ -243,8 +250,32 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 }
 
 func dragonboxDigits(d *decimalSlice, mant uint64, exp int) {
-	_, str := formatBits(d.d, mant, 10, false, false)
-	d.d = []byte(str)
+	// similar to formatBits (adapted from ryuDigits)
+	n := len(d.d)
+	v := mant
+
+	for v >= 100 {
+		var v1, v2 uint64
+		if v>>32 == 0 {
+			v1, v2 = uint64(uint32(v)/100), uint64(uint32(v)%100)
+		} else {
+			v1, v2 = v/100, v%100
+		}
+		n -= 2
+		d.d[n+1] = smallsString[2*v2+1]
+		d.d[n+0] = smallsString[2*v2+0]
+		v = v1
+	}
+	if v > 0 {
+		n--
+		d.d[n] = smallsString[2*v+1]
+	}
+	if v >= 10 {
+		n--
+		d.d[n] = smallsString[2*v]
+	}
+
+	d.d = d.d[n:]
 	d.nd = len(d.d)
 	d.dp = d.nd + exp // adjusts decimal point
 }
@@ -341,9 +372,9 @@ func computeMul32(u uint32, cache uint64) (intPart uint32, isInt bool) {
 }
 
 func computeMulParity64(twoF uint64, cache uint128, beta int) (parity bool, isInt bool) {
-	if beta < 1 || beta >= 64 {
-		panic("computeMulParity64: beta out of range")
-	}
+	// if beta < 1 || beta >= 64 {
+	// 	panic("computeMulParity64: beta out of range")
+	// }
 
 	r := umul192Lower128(twoF, cache)
 	parity = ((r.hi >> (64 - beta)) & 1) != 0
@@ -352,9 +383,9 @@ func computeMulParity64(twoF uint64, cache uint128, beta int) (parity bool, isIn
 }
 
 func computeMulParity32(twoF uint32, cache uint64, beta int) (parity bool, isInt bool) {
-	if beta < 1 || beta > 32 {
-		panic("computeMulParity32: beta out of range")
-	}
+	// if beta < 1 || beta > 32 {
+	// 	panic("computeMulParity32: beta out of range")
+	// }
 
 	r := umul96Lower64(twoF, cache)
 	parity = ((r >> (64 - beta)) & 1) != 0
@@ -373,9 +404,9 @@ func computeDelta32(cache uint64, beta int) uint32 {
 // computes a^k by squaring
 func computePower[T uint32 | uint64](a T, k int) T {
 	// TODO: k should be known at compile time
-	if k < 0 {
-		panic("computePower: exponent must be non-negative")
-	}
+	// if k < 0 {
+	// 	panic("computePower: exponent must be non-negative")
+	// }
 
 	p := T(1)
 	for k > 0 {
@@ -419,9 +450,9 @@ func divideByPow10_32(n, nMax uint32, k int) uint32 {
 }
 
 func checkDivisibilityAndDivideByPow10[T uint32 | uint64](n T, k int) (divided T, ok bool) {
-	if n > computePower(T(10), k+1) {
-		panic("checkDivisibilityAndDivideByPow10: n exceeds allowed value")
-	}
+	// if n > computePower(T(10), k+1) {
+	// 	panic("checkDivisibilityAndDivideByPow10: n exceeds allowed value")
+	// }
 
 	divideMagicNumbers := [2]uint32{6554, 656}
 	magicNumber := divideMagicNumbers[k-1]
@@ -434,64 +465,29 @@ func checkDivisibilityAndDivideByPow10[T uint32 | uint64](n T, k int) (divided T
 	return n, result
 }
 
-func countFactors[T uint32 | uint64](n T, a int) int {
-	if a <= 1 {
-		panic("CountFactors: a must be > 1")
-	}
-
-	c := 0
-	for n%T(a) == 0 {
-		n /= T(a)
-		c++
-	}
-	return c
-}
-
-func floorLog2(n uint64) int {
-	// TODO: only used for compile-time constants
-	// TODO: can be optimized by inlining constant values instead
-	count := -1
-	for n != 0 {
-		count++
-		n >>= 1
-	}
-	return count
-}
-
 func floorLog10Pow2(e int) int {
-	if e < -2620 || 2620 < e {
-		panic("floorLog10Pow2: e out of range")
-	}
+	// if e < -2620 || 2620 < e {
+	// 	panic("floorLog10Pow2: e out of range")
+	// }
+
 	return (e * 315653) >> 20
 }
 
 func floorLog2Pow10(e int) int {
 	// Formula itself holds on [-4003,4003]; restricted to [-1233,1233] to avoid overflow
-	if e < -1233 || 1233 < e {
-		panic("floorLog2Pow10: e out of range")
-	}
+	// if e < -1233 || 1233 < e {
+	// 	panic("floorLog2Pow10: e out of range")
+	// }
+
 	return (e * 1741647) >> 19
 }
 
 func floorLog10Pow2MinusLog10_4Over3(e int) int {
-	if e < -2985 || 2936 < e {
-		panic("floorLog10Pow2MinusLog10_4Over3: e out of range")
-	}
+	// if e < -2985 || 2936 < e {
+	// 	panic("floorLog10Pow2MinusLog10_4Over3: e out of range")
+	// }
+
 	return (e*631305 - 261663) >> 21
-}
-
-func floorLog5Pow2(e int) int {
-	if e < -1831 || 1831 < e {
-		panic("floorLog5Pow2: e out of range")
-	}
-	return (e * 225799) >> 19
-}
-
-func floorLog5Pow2MinusLog5_3(e int) int {
-	if e < -3543 || 2427 < e {
-		panic("floorLog5Pow2MinusLog5_3: e out of range")
-	}
-	return (e*451597 - 715764) >> 20
 }
 
 const (
@@ -499,22 +495,16 @@ const (
 	cacheBits32 = 64
 	mantBits64  = 52
 	mantBits32  = 23
-)
 
-var (
 	shorterIntervalLeftEndpointLowerThreshold64 = 2
-	shorterIntervalLeftEndpointUpperThreshold64 = 2 +
-		floorLog2(computePower(uint64(10), countFactors((uint64(1)<<(mantBits64+2))-1, 5)+1)/3)
-
+	shorterIntervalLeftEndpointUpperThreshold64 = 3
 	shorterIntervalLeftEndpointLowerThreshold32 = 2
-	shorterIntervalLeftEndpointUpperThreshold32 = 2 +
-		floorLog2(uint64(computePower(uint32(10), countFactors((uint32(1)<<(mantBits32+2))-1, 5)+1)/3))
+	shorterIntervalLeftEndpointUpperThreshold32 = 3
 
-	shorterIntervalTieLowerThreshold64 = -floorLog5Pow2MinusLog5_3(mantBits64+4) - 2 - mantBits64
-	shorterIntervalTieUpperThreshold64 = -floorLog5Pow2(mantBits64+2) - 2 - mantBits64
-
-	shorterIntervalTieLowerThreshold32 = -floorLog5Pow2MinusLog5_3(mantBits32+4) - 2 - mantBits32
-	shorterIntervalTieUpperThreshold32 = -floorLog5Pow2(mantBits32+2) - 2 - mantBits32
+	shorterIntervalTieLowerThreshold64 = -77
+	shorterIntervalTieUpperThreshold64 = -77
+	shorterIntervalTieLowerThreshold32 = -35
+	shorterIntervalTieUpperThreshold32 = -35
 )
 
 func computeLeftEndpointForShorterIntervalCase64(cache uint128, beta int) uint64 {
@@ -615,24 +605,23 @@ func removeTrailingZeros32(mant uint32, exp int) (uint32, int) {
 
 const (
 	cacheMinK64 = -292
-	cacheMaxK64 = 326
-
+	// cacheMaxK64 = 326
 	cacheMinK32 = -31
-	cacheMaxK32 = 46
+	// cacheMaxK32 = 46
 )
 
 func getCache64(k int) uint128 {
-	if k < cacheMinK64 || k > cacheMaxK64 {
-		panic("getCache64: k out of range")
-	}
+	// if k < cacheMinK64 || k > cacheMaxK64 {
+	// 	panic("getCache64: k out of range")
+	// }
 
 	return cache64[k-cacheMinK64]
 }
 
 func getCache32(k int) uint64 {
-	if k < cacheMinK32 || k > cacheMaxK32 {
-		panic("getCache32: k out of range")
-	}
+	// if k < cacheMinK32 || k > cacheMaxK32 {
+	// 	panic("getCache32: k out of range")
+	// }
 
 	return cache32[k-cacheMinK32]
 }
@@ -1375,12 +1364,7 @@ func CompareDragonboxFtoaAndRyuFtoaShortest(bitSize int, val32 float32, val64 fl
 	var digs1 decimalSlice
 	var dbuf1 [32]byte
 	digs1.d = dbuf1[:]
-	switch bitSize {
-	case 32:
-		dragonboxFtoa32(&digs1, uint32(mant), exp-int(flt.mantbits), denorm)
-	case 64:
-		dragonboxFtoa64(&digs1, mant, exp-int(flt.mantbits), denorm)
-	}
+	dragonboxFtoa(&digs1, mant, exp-int(flt.mantbits), denorm, bitSize)
 
 	var digs2 decimalSlice
 	var dbuf2 [32]byte
@@ -1417,12 +1401,7 @@ func RunDragonboxFtoa(bitSize int, val32 float32, val64 float64) {
 	var digs decimalSlice
 	var dbuf [32]byte
 	digs.d = dbuf[:]
-	switch bitSize {
-	case 32:
-		dragonboxFtoa32(&digs, uint32(mant), exp-int(flt.mantbits), denorm)
-	case 64:
-		dragonboxFtoa64(&digs, mant, exp-int(flt.mantbits), denorm)
-	}
+	dragonboxFtoa(&digs, mant, exp-int(flt.mantbits), denorm, bitSize)
 
 	var fbuf [32]byte
 	prec := max(digs.nd-1, 0)

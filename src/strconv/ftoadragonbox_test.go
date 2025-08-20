@@ -39,11 +39,6 @@ func TestFtoaDragonbox(t *testing.T) {
 	}
 }
 
-// TODO:
-// dragonbox is slightly slower (94ns vs 72ns) with the current impl
-// heap allocation in systemstack is taking more time than cumulative time in BenchmarkDragonboxFtoa
-// we need to remove string/byte conversion in dragonboxDigits
-
 func BenchmarkDragonboxFtoa(b *testing.B) {
 	// prepare inputs in advance
 	// to prevent repeated calls to StartTimer/StopTimer in the loop
