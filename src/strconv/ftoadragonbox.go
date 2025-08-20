@@ -28,8 +28,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	// second short path (exact integer)
 	if exp <= 0 && bits.TrailingZeros64(mant) >= -exp {
 		mant >>= uint(-exp)
-		decMant, decExp := removeTrailingZeros64(mant, 0)
-		dragonboxDigits(d, decMant, decExp)
+		dragonboxDigits(d, mant, 0)
 		return
 	}
 
@@ -51,8 +50,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 
 		decMant := divideByPow10_64(zi, (((uint64(2)<<mantBits64)+1)/3+1)*20, 1)
 		if decMant*10 >= xi {
-			decMant, decExp := removeTrailingZeros64(decMant, minusK+1)
-			dragonboxDigits(d, decMant, decExp)
+			dragonboxDigits(d, decMant, minusK+1)
 			return
 		}
 
@@ -96,8 +94,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	// but this may make code harder to understand
 	if r < deltaI {
 		if r != 0 || !zIsInt || includeRightEndpoint {
-			decMant, decExp := removeTrailingZeros64(decMant, minusK+kappa+1)
-			dragonboxDigits(d, decMant, decExp)
+			dragonboxDigits(d, decMant, minusK+kappa+1)
 			return
 		}
 		decMant--
@@ -105,8 +102,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	} else if r == deltaI {
 		xParity, xIsInt := computeMulParity64(uint64(twoFc-1), cache, beta)
 		if xParity || (xIsInt && includeLeftEndpoint) {
-			decMant, decExp := removeTrailingZeros64(decMant, minusK+kappa+1)
-			dragonboxDigits(d, decMant, decExp)
+			dragonboxDigits(d, decMant, minusK+kappa+1)
 			return
 		}
 	}
@@ -144,8 +140,7 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 	// second short path (exact integer)
 	if exp <= 0 && bits.TrailingZeros32(mant) >= -exp {
 		mant >>= uint(-exp)
-		decMant, decExp := removeTrailingZeros32(mant, 0)
-		dragonboxDigits(d, uint64(decMant), decExp)
+		dragonboxDigits(d, uint64(mant), 0)
 		return
 	}
 
@@ -167,8 +162,7 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 
 		decMant := divideByPow10_32(zi, (((uint32(2)<<mantBits32)+1)/3+1)*20, 1)
 		if decMant*10 >= xi {
-			decMant, decExp := removeTrailingZeros32(decMant, minusK+1)
-			dragonboxDigits(d, uint64(decMant), decExp)
+			dragonboxDigits(d, uint64(decMant), minusK+1)
 			return
 		}
 
@@ -212,8 +206,7 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 	// but this may make code harder to understand
 	if r < deltaI {
 		if r != 0 || !zIsInt || includeRightEndpoint {
-			decMant, decExp := removeTrailingZeros32(decMant, minusK+kappa+1)
-			dragonboxDigits(d, uint64(decMant), decExp)
+			dragonboxDigits(d, uint64(decMant), minusK+kappa+1)
 			return
 		}
 		decMant--
@@ -221,8 +214,7 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 	} else if r == deltaI {
 		xParity, xIsInt := computeMulParity32(uint32(twoFc-1), cache, beta)
 		if xParity || (xIsInt && includeLeftEndpoint) {
-			decMant, decExp := removeTrailingZeros32(decMant, minusK+kappa+1)
-			dragonboxDigits(d, uint64(decMant), decExp)
+			dragonboxDigits(d, uint64(decMant), minusK+kappa+1)
 			return
 		}
 	}
@@ -278,6 +270,17 @@ func dragonboxDigits(d *decimalSlice, mant uint64, exp int) {
 	d.d = d.d[n:]
 	d.nd = len(d.d)
 	d.dp = d.nd + exp // adjusts decimal point
+
+	// trim trailing zeros
+	for d.nd > 0 && d.d[d.nd-1] == '0' {
+		d.nd--
+	}
+	// trim initial zeros
+	for d.nd > 0 && d.d[0] == '0' {
+		d.nd--
+		d.dp--
+		d.d = d.d[1:]
+	}
 }
 
 type uint128 struct {
@@ -533,74 +536,6 @@ func computeRoundUpForShorterIntervalCase64(cache uint128, beta int) uint64 {
 
 func computeRoundUpForShorterIntervalCase32(cache uint64, beta int) uint32 {
 	return uint32(cache>>(cacheBits32-mantBits32-2-beta)+1) / 2
-}
-
-// removes trailing zeros in decimal (not binary)
-func removeTrailingZeros64(mant uint64, exp int) (uint64, int) {
-	r := bits.RotateLeft64(mant*28999941890838049, -8)
-	b := r < 184467440738
-	s := 0
-	if b { // TODO: make this branchless
-		s++
-		mant = r
-	}
-
-	r = bits.RotateLeft64(mant*182622766329724561, -4)
-	b = r < 1844674407370956
-	s = s * 2
-	if b {
-		s++
-		mant = r
-	}
-
-	r = bits.RotateLeft64(mant*10330176681277348905, -2)
-	b = r < 184467440737095517
-	s = s * 2
-	if b {
-		s++
-		mant = r
-	}
-
-	r = bits.RotateLeft64(mant*14757395258967641293, -1)
-	b = r < 1844674407370955162
-	s = s * 2
-	if b {
-		s++
-		mant = r
-	}
-
-	exp += s
-	return mant, exp
-}
-
-// removes trailing zeros in decimal (not binary)
-func removeTrailingZeros32(mant uint32, exp int) (uint32, int) {
-	r := bits.RotateLeft32(mant*184254097, -4)
-	b := r < 429497
-	s := 0
-	if b { // TODO: make this branchless
-		s++
-		mant = r
-	}
-
-	r = bits.RotateLeft32(mant*42949673, -2)
-	b = r < 42949673
-	s = s * 2
-	if b {
-		s++
-		mant = r
-	}
-
-	r = bits.RotateLeft32(mant*1288490189, -1)
-	b = r < 429496730
-	s = s * 2
-	if b {
-		s++
-		mant = r
-	}
-
-	exp += s
-	return mant, exp
 }
 
 const (

@@ -22,7 +22,7 @@ func randomFloat64FullRange() float64 {
 }
 
 func TestFtoaDragonbox(t *testing.T) {
-	for i := 0; i < 100000; i++ {
+	for i := 0; i < 1000000; i++ {
 		var bitSize int
 		if rand.Intn(2) == 0 {
 			bitSize = 32
