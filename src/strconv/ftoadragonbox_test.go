@@ -54,19 +54,19 @@ func BenchmarkRunDragonboxFtoaRandomBits(b *testing.B) {
 
 	for b.Loop() {
 		for i := 0; i < iter; i++ {
-			// val := randomFloat64FullRange()
-			// bitSize := 64
+			val := randomFloat64FullRange()
+			bitSize := 64
 
-			var val float64
-			var bitSize int
-			switch rand.Intn(2) {
-			case 0:
-				val = float64(randomFloat32FullRange())
-				bitSize = 32
-			case 1:
-				val = randomFloat64FullRange()
-				bitSize = 64
-			}
+			// var val float64
+			// var bitSize int
+			// switch rand.Intn(2) {
+			// case 0:
+			// 	val = float64(randomFloat32FullRange())
+			// 	bitSize = 32
+			// case 1:
+			// 	val = randomFloat64FullRange()
+			// 	bitSize = 64
+			// }
 
 			_, elapsed1 := RunDragonboxFtoa(val, bitSize)
 			_, elapsed2 := RunRyuFtoaShortest(val, bitSize)
@@ -85,19 +85,19 @@ func BenchmarkRunDragonboxFtoaRandomDigits(b *testing.B) {
 	for b.Loop() {
 		for n := 1; n <= 17; n++ {
 			for range iter {
-				// val := randomFloat64FullRange()
-				// bitSize := 64
+				val := randomFloat64FullRange()
+				bitSize := 64
 
-				var val float64
-				var bitSize int
-				switch rand.Intn(2) {
-				case 0:
-					val = float64(randomFloat32FullRange())
-					bitSize = 32
-				case 1:
-					val = randomFloat64FullRange()
-					bitSize = 64
-				}
+				// var val float64
+				// var bitSize int
+				// switch rand.Intn(2) {
+				// case 0:
+				// 	val = float64(randomFloat32FullRange())
+				// 	bitSize = 32
+				// case 1:
+				// 	val = randomFloat64FullRange()
+				// 	bitSize = 64
+				// }
 
 				// truncate to n digits
 				s := FormatFloat(val, 'e', n, bitSize)
@@ -126,19 +126,19 @@ func BenchmarkProfileDragonboxFtoa(b *testing.B) {
 
 	tests := make([]testcase, iter)
 	for i := 0; i < iter; i++ {
-		// val := randomFloat64FullRange()
-		// bitSize := 64
+		val := randomFloat64FullRange()
+		bitSize := 64
 
-		var val float64
-		var bitSize int
-		switch rand.Intn(2) {
-		case 0:
-			val = float64(randomFloat32FullRange())
-			bitSize = 32
-		case 1:
-			val = randomFloat64FullRange()
-			bitSize = 64
-		}
+		// var val float64
+		// var bitSize int
+		// switch rand.Intn(2) {
+		// case 0:
+		// 	val = float64(randomFloat32FullRange())
+		// 	bitSize = 32
+		// case 1:
+		// 	val = randomFloat64FullRange()
+		// 	bitSize = 64
+		// }
 
 		tests[i] = testcase{val, bitSize}
 	}
@@ -148,6 +148,7 @@ func BenchmarkProfileDragonboxFtoa(b *testing.B) {
 	for b.Loop() {
 		for _, tt := range tests {
 			ProfileDragonboxFtoa(tt.val, tt.bitSize)
+			ProfileRyuFtoaShortest(tt.val, tt.bitSize)
 		}
 	}
 }
@@ -164,19 +165,19 @@ func BenchmarkProfileRyuFtoaShortest(b *testing.B) {
 
 	tests := make([]testcase, iter)
 	for i := 0; i < iter; i++ {
-		// val := randomFloat64FullRange()
-		// bitSize := 64
+		val := randomFloat64FullRange()
+		bitSize := 64
 
-		var val float64
-		var bitSize int
-		switch rand.Intn(2) {
-		case 0:
-			val = float64(randomFloat32FullRange())
-			bitSize = 32
-		case 1:
-			val = randomFloat64FullRange()
-			bitSize = 64
-		}
+		// var val float64
+		// var bitSize int
+		// switch rand.Intn(2) {
+		// case 0:
+		// 	val = float64(randomFloat32FullRange())
+		// 	bitSize = 32
+		// case 1:
+		// 	val = randomFloat64FullRange()
+		// 	bitSize = 64
+		// }
 
 		tests[i] = testcase{val, bitSize}
 	}

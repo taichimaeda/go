@@ -5,7 +5,7 @@
 package strconv
 
 import (
-	"math/bits"
+	"math"
 	"time"
 )
 
@@ -18,24 +18,15 @@ func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, denorm bool, bitSize i
 }
 
 func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
-	// first short path (denormalized and zero mantissa)
+	// short path (denormalized and zero mantissa)
 	if mant == 0 {
 		d.nd, d.dp = 0, 0
 		return
 	}
 
-	// second short path (exact integer)
-	if exp <= 0 && bits.TrailingZeros64(mant) >= -exp {
-		mant >>= uint(-exp)
-		dragonboxDigits(d, mant, 0)
-		return
-	}
-
-	twoFc := mant * 2
-	binExp := exp
-
 	// shorter interval case
-	if !denorm && mant == (1<<mantBits64) {
+	if mant == (1<<mantBits64) && !denorm { // unlikely
+		binExp := exp
 		minusK := floorLog10Pow2MinusLog10_4Over3(binExp)
 		beta := binExp + floorLog2Pow10(-minusK)
 		cache := getCache64(-minusK)
@@ -51,6 +42,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 		q := zi / 10
 		if q*10 >= xi {
 			dragonboxDigits(d, q, minusK+1)
+			removeTrailingZeros(d)
 			return
 		}
 
@@ -70,6 +62,8 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	// step 1: Schubfach multiplier calculation
 	const kappa = 2 // float64
 	// const kappa = 1 // float32
+	twoFc := mant * 2
+	binExp := exp
 	minusK := floorLog10Pow2(binExp) - kappa
 	beta := binExp + floorLog2Pow10(-minusK)
 	cache := getCache64(-minusK)
@@ -84,17 +78,19 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	q := zIntPart / bigDivisor
 	r := uint32(zIntPart - bigDivisor*q)
 
-	if r < deltaI {
-		if r != 0 || !zIsInt || mant%2 == 0 {
+	if r < deltaI { // likely
+		if r != 0 || !zIsInt || mant%2 == 0 { // likely
 			dragonboxDigits(d, q, minusK+kappa+1)
+			removeTrailingZeros(d)
 			return
 		}
 		q--
 		r = bigDivisor
-	} else if r == deltaI {
+	} else if r == deltaI { // unlikely
 		xParity, xIsInt := computeMulParity64(uint64(twoFc-1), cache, beta)
 		if xParity || (xIsInt && mant%2 == 0) {
 			dragonboxDigits(d, q, minusK+kappa+1)
+			removeTrailingZeros(d)
 			return
 		}
 	}
@@ -105,7 +101,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	distQ := uint32(dist / smallDivisor)
 	q += uint64(distQ)
 
-	if dist == distQ*smallDivisor {
+	if dist == distQ*smallDivisor { // likely
 		approxYParity := ((dist ^ (smallDivisor / 2)) & 1) != 0
 		yParity, yIsInt := computeMulParity64(twoFc, cache, beta)
 		if yParity != approxYParity || (q%2 != 0 && yIsInt) {
@@ -117,24 +113,15 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 
 func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 	// TODO: this is almost an exact copy of dragonboxFtoa64
-	// first short path (denormalized and zero mantissa)
+	// short path (denormalized and zero mantissa)
 	if mant == 0 {
 		d.nd, d.dp = 0, 0
 		return
 	}
 
-	// second short path (exact integer)
-	if exp <= 0 && bits.TrailingZeros32(mant) >= -exp {
-		mant >>= uint(-exp)
-		dragonboxDigits(d, uint64(mant), 0)
-		return
-	}
-
-	twoFc := mant * 2
-	binExp := exp
-
 	// shorter interval case
-	if !denorm && mant == (1<<mantBits32) {
+	if mant == (1<<mantBits32) && !denorm { // unlikely
+		binExp := exp
 		minusK := floorLog10Pow2MinusLog10_4Over3(binExp)
 		beta := binExp + floorLog2Pow10(-minusK)
 		cache := getCache32(-minusK)
@@ -149,6 +136,7 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 		q := zi / 10
 		if q*10 >= xi {
 			dragonboxDigits(d, uint64(q), minusK+1)
+			removeTrailingZeros(d)
 			return
 		}
 
@@ -168,6 +156,8 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 	// step 1: Schubfach multiplier calculation
 	// const kappa = 2 // float64
 	const kappa = 1 // float32
+	twoFc := mant * 2
+	binExp := exp
 	minusK := floorLog10Pow2(binExp) - kappa
 	beta := binExp + floorLog2Pow10(-minusK)
 	cache := getCache32(-minusK)
@@ -182,17 +172,19 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 	q := zIntPart / bigDivisor
 	r := uint32(zIntPart - bigDivisor*q)
 
-	if r < deltaI {
-		if r != 0 || !zIsInt || mant%2 == 0 {
+	if r < deltaI { // likely
+		if r != 0 || !zIsInt || mant%2 == 0 { // likely
 			dragonboxDigits(d, uint64(q), minusK+kappa+1)
+			removeTrailingZeros(d)
 			return
 		}
 		q--
 		r = bigDivisor
-	} else if r == deltaI {
+	} else if r == deltaI { // unlikely
 		xParity, xIsInt := computeMulParity32(uint32(twoFc-1), cache, beta)
 		if xParity || (xIsInt && mant%2 == 0) {
 			dragonboxDigits(d, uint64(q), minusK+kappa+1)
+			removeTrailingZeros(d)
 			return
 		}
 	}
@@ -203,7 +195,7 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 	distQ := dist / smallDivisor
 	q += distQ
 
-	if dist == distQ*smallDivisor {
+	if dist == distQ*smallDivisor { // likely
 		approxYParity := ((dist ^ (smallDivisor / 2)) & 1) != 0
 		yParity, yIsInt := computeMulParity32(twoFc, cache, beta)
 		if yParity != approxYParity || (q%2 != 0 && yIsInt) {
@@ -219,12 +211,7 @@ func dragonboxDigits(d *decimalSlice, mant uint64, exp int) {
 	v := mant
 
 	for v >= 100 {
-		var v1, v2 uint64
-		if v>>32 == 0 {
-			v1, v2 = uint64(uint32(v)/100), uint64(uint32(v)%100)
-		} else {
-			v1, v2 = v/100, v%100
-		}
+		v1, v2 := v/100, v%100
 		n -= 2
 		d.d[n+1] = smallsString[2*v2+1]
 		d.d[n+0] = smallsString[2*v2+0]
@@ -242,16 +229,11 @@ func dragonboxDigits(d *decimalSlice, mant uint64, exp int) {
 	d.d = d.d[n:]
 	d.nd = len(d.d)
 	d.dp = d.nd + exp // adjusts decimal point
+}
 
-	// trim trailing zeros
+func removeTrailingZeros(d *decimalSlice) {
 	for d.nd > 0 && d.d[d.nd-1] == '0' {
 		d.nd--
-	}
-	// trim initial zeros
-	for d.nd > 0 && d.d[0] == '0' {
-		d.nd--
-		d.dp--
-		d.d = d.d[1:]
 	}
 }
 
@@ -1109,8 +1091,10 @@ func newTestInfo(val float64, bitSize int) (testInfo, bool) {
 
 	switch bitSize {
 	case 32:
+		bits = uint64(math.Float32bits(float32(val)))
 		flt = &float32info
 	case 64:
+		bits = math.Float64bits(val)
 		flt = &float64info
 	default:
 		panic("newTestInfo: illegal bitSize")
@@ -1193,6 +1177,7 @@ func RunRyuFtoaShortest(val float64, bitSize int) (string, time.Duration) {
 }
 
 // utility function for profiling
+// excludes slow code to allow more relevant samples to be collected
 func ProfileDragonboxFtoa(val float64, bitSize int) {
 	test, ok := newTestInfo(val, bitSize)
 	if !ok {
@@ -1211,6 +1196,7 @@ func ProfileDragonboxFtoa(val float64, bitSize int) {
 }
 
 // utility function for profiling
+// excludes slow code to allow more relevant samples to be collected
 func ProfileRyuFtoaShortest(val float64, bitSize int) {
 	test, ok := newTestInfo(val, bitSize)
 	if !ok {
