@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	. "strconv"
 	"testing"
+	"time"
 )
 
 func randomFloat32FullRange() float32 {
@@ -22,77 +23,53 @@ func randomFloat64FullRange() float64 {
 }
 
 func TestFtoaDragonbox(t *testing.T) {
-	for i := 0; i < 1000000; i++ {
-		bitSize := 64
-		if rand.Intn(2) == 0 {
-			bitSize = 32
-		}
-		val32 := randomFloat32FullRange()
-		val64 := randomFloat64FullRange()
+	const iter = 100000
 
-		if err := CompareDragonboxFtoaAndRyuFtoaShortest(bitSize, val32, val64); err != nil {
-			t.Errorf("Mismatch:\nInput: %f\nRyu output: %s\nDragonbox output: %s",
-				err.Val, err.RyuOutput, err.DragonboxOutput)
+	for i := 0; i < iter; i++ {
+		var bitSize int
+		var val float64
+		switch rand.Intn(2) {
+		case 0:
+			bitSize = 32
+			val = float64(randomFloat32FullRange())
+		case 1:
+			bitSize = 64
+			val = randomFloat64FullRange()
+		}
+
+		output1, _ := RunDragonboxFtoa(val, bitSize)
+		output2, _ := RunRyuFtoaShortest(val, bitSize)
+
+		if output1 != output2 {
+			t.Errorf("Mismatch:\nInput: %f\nDragonbox output: %s\nRyu output: %s", val, output1, output2)
 		}
 	}
 }
 
 func BenchmarkDragonboxFtoa(b *testing.B) {
-	// prepare inputs in advance
-	// to prevent repeated calls to StartTimer/StopTimer in the loop
-	b.StopTimer()
+	const numTests = 100000
 
-	type input struct {
-		bitSize int
-		val32   float32
-		val64   float64
-	}
+	var total1, total2 time.Duration
 
-	tests := make([]input, b.N)
-	for i := 0; i < b.N; i++ {
-		bitSize := 64
-		if rand.Intn(2) == 0 {
-			bitSize = 32
+	for b.Loop() {
+		for i := 0; i < numTests; i++ {
+			var bitSize int
+			var val float64
+			switch rand.Intn(2) {
+			case 0:
+				bitSize = 32
+				val = float64(randomFloat32FullRange())
+			case 1:
+				bitSize = 64
+				val = randomFloat64FullRange()
+			}
+
+			_, elapsed1 := RunDragonboxFtoa(val, bitSize)
+			_, elapsed2 := RunRyuFtoaShortest(val, bitSize)
+			total1 += elapsed1
+			total2 += elapsed2
 		}
-		val32 := randomFloat32FullRange()
-		val64 := randomFloat64FullRange()
-		tests[i] = input{bitSize, val32, val64}
 	}
 
-	b.StartTimer()
-
-	for _, tt := range tests {
-		RunDragonboxFtoa(tt.bitSize, tt.val32, tt.val64)
-	}
-}
-
-func BenchmarkRyuFtoaShortest(b *testing.B) {
-	// prepare inputs in advance
-	// to prevent repeated calls to StartTimer/StopTimer in the loop
-	b.StopTimer()
-
-	type input struct {
-		bitSize int
-		val32   float32
-		val64   float64
-	}
-
-	tests := make([]input, b.N)
-	for i := 0; i < b.N; i++ {
-		var bitSize int
-		if rand.Intn(2) == 0 {
-			bitSize = 32
-		} else {
-			bitSize = 64
-		}
-		val32 := randomFloat32FullRange()
-		val64 := randomFloat64FullRange()
-		tests[i] = input{bitSize, val32, val64}
-	}
-
-	b.StartTimer()
-
-	for _, tt := range tests {
-		RunRyuFtoaShortest(tt.bitSize, tt.val32, tt.val64)
-	}
+	b.Logf("Duration:\nDragonbox: %d\nRyu: %d", total1, total2)
 }

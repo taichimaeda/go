@@ -5,17 +5,16 @@
 package strconv
 
 import (
-	"math"
 	"math/bits"
+	"time"
 )
 
 func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, denorm bool, bitSize int) {
-	switch bitSize {
-	case 32:
+	if bitSize == 32 {
 		dragonboxFtoa32(d, uint32(mant), exp, denorm)
-	case 64:
-		dragonboxFtoa64(d, mant, exp, denorm)
+		return
 	}
+	dragonboxFtoa64(d, mant, exp, denorm)
 }
 
 func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
@@ -40,8 +39,8 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 		minusK := floorLog10Pow2MinusLog10_4Over3(binExp)
 		beta := binExp + floorLog2Pow10(-minusK)
 		cache := getCache64(-minusK)
-		xi := computeLeftEndpointForShorterIntervalCase64(cache, beta)
-		zi := computeRightEndpointForShorterIntervalCase64(cache, beta)
+		xi := computeLeftEndpoint64(cache, beta)
+		zi := computeRightEndpoint64(cache, beta)
 
 		// left endpoint threshold [2, 3]
 		if !(binExp >= 2 && binExp <= 3) {
@@ -55,7 +54,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 			return
 		}
 
-		q = computeRoundUpForShorterIntervalCase64(cache, beta)
+		q = computeRoundUp64(cache, beta)
 		// tie threshold [-77, -77]
 		if q%2 != 0 && binExp == -77 {
 			q-- // round to even
@@ -83,7 +82,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	const smallDivisor = 100 // 10^kappa
 
 	q := zIntPart / bigDivisor
-	r := uint64(zIntPart - bigDivisor*q)
+	r := uint32(zIntPart - bigDivisor*q)
 
 	if r < deltaI {
 		if r != 0 || !zIsInt || mant%2 == 0 {
@@ -102,9 +101,9 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 
 	// step 3: find the significand with the smaller divisor
 	q *= 10
-	dist := uint64(r - (deltaI / 2) + (smallDivisor / 2))
-	distQ := dist / smallDivisor
-	q += distQ
+	dist := uint32(r - (deltaI / 2) + (smallDivisor / 2))
+	distQ := uint32(dist / smallDivisor)
+	q += uint64(distQ)
 
 	if dist == distQ*smallDivisor {
 		approxYParity := ((dist ^ (smallDivisor / 2)) & 1) != 0
@@ -116,8 +115,8 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	dragonboxDigits(d, q, minusK+kappa)
 }
 
-// TODO: this is almost an exact copy of dragonboxFtoa64
 func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
+	// TODO: this is almost an exact copy of dragonboxFtoa64
 	// first short path (denormalized and zero mantissa)
 	if mant == 0 {
 		d.nd, d.dp = 0, 0
@@ -139,8 +138,8 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 		minusK := floorLog10Pow2MinusLog10_4Over3(binExp)
 		beta := binExp + floorLog2Pow10(-minusK)
 		cache := getCache32(-minusK)
-		xi := computeLeftEndpointForShorterIntervalCase32(cache, beta)
-		zi := computeRightEndpointForShorterIntervalCase32(cache, beta)
+		xi := computeLeftEndpoint32(cache, beta)
+		zi := computeRightEndpoint32(cache, beta)
 
 		// left endpoint threshold [2, 3]
 		if !(binExp >= 2 && binExp <= 3) {
@@ -153,7 +152,7 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 			return
 		}
 
-		q = computeRoundUpForShorterIntervalCase32(cache, beta)
+		q = computeRoundUp32(cache, beta)
 		// tie threshold [-35, -35]
 		if q%2 != 0 && binExp == -35 {
 			q-- // round to even
@@ -361,8 +360,8 @@ func computeMulParity32(twoF uint32, cache uint64, beta int) (parity bool, isInt
 	return
 }
 
-func computeDelta64(cache uint128, beta int) uint64 {
-	return cache.hi >> (cacheBits64/2 - 1 - beta)
+func computeDelta64(cache uint128, beta int) uint32 {
+	return uint32(cache.hi >> (cacheBits64/2 - 1 - beta))
 }
 
 func computeDelta32(cache uint64, beta int) uint32 {
@@ -389,31 +388,31 @@ const (
 	mantBits32  = 23
 )
 
-func computeLeftEndpointForShorterIntervalCase64(cache uint128, beta int) uint64 {
+func computeLeftEndpoint64(cache uint128, beta int) uint64 {
 	return (cache.hi - (cache.hi >> (mantBits64 + 2))) >>
 		(cacheBits64/2 - mantBits64 - 1 - beta)
 }
 
-func computeLeftEndpointForShorterIntervalCase32(cache uint64, beta int) uint32 {
+func computeLeftEndpoint32(cache uint64, beta int) uint32 {
 	return uint32(cache-(cache>>(mantBits32+2))) >>
 		(cacheBits32 - mantBits32 - 1 - beta)
 }
 
-func computeRightEndpointForShorterIntervalCase64(cache uint128, beta int) uint64 {
+func computeRightEndpoint64(cache uint128, beta int) uint64 {
 	return (cache.hi + (cache.hi >> (mantBits64 + 1))) >>
 		(cacheBits64/2 - mantBits64 - 1 - beta)
 }
 
-func computeRightEndpointForShorterIntervalCase32(cache uint64, beta int) uint32 {
+func computeRightEndpoint32(cache uint64, beta int) uint32 {
 	return uint32(cache+(cache>>(mantBits32+1))) >>
 		(cacheBits32 - mantBits32 - 1 - beta)
 }
 
-func computeRoundUpForShorterIntervalCase64(cache uint128, beta int) uint64 {
+func computeRoundUp64(cache uint128, beta int) uint64 {
 	return (cache.hi>>(cacheBits64/2-mantBits64-2-beta) + 1) / 2
 }
 
-func computeRoundUpForShorterIntervalCase32(cache uint64, beta int) uint32 {
+func computeRoundUp32(cache uint64, beta int) uint32 {
 	return uint32(cache>>(cacheBits32-mantBits32-2-beta)+1) / 2
 }
 
@@ -1103,29 +1102,18 @@ type testInfo struct {
 	flt    *floatInfo
 }
 
-type errorInfo struct {
-	Val             float64
-	RyuOutput       string
-	DragonboxOutput string
-}
-
 // utility function for testing
-func newTestInfo(bitSize int, val32 float32, val64 float64) (testInfo, bool) {
-	var val float64
+func newTestInfo(val float64, bitSize int) (testInfo, bool) {
 	var bits uint64
 	var flt *floatInfo
 
 	switch bitSize {
 	case 32:
-		val = float64(val32)
-		bits = uint64(math.Float32bits(val32))
 		flt = &float32info
 	case 64:
-		val = val64
-		bits = math.Float64bits(val64)
 		flt = &float64info
 	default:
-		panic("CompareDragonboxRyuShortestFtoa64: illegal bitSize")
+		panic("newTestInfo: illegal bitSize")
 	}
 
 	neg := bits>>(flt.expbits+flt.mantbits) != 0
@@ -1151,49 +1139,11 @@ func newTestInfo(bitSize int, val32 float32, val64 float64) (testInfo, bool) {
 	return testInfo{val, neg, mant, exp, denorm, flt}, true
 }
 
-// utility function for fuzz testing
-func CompareDragonboxFtoaAndRyuFtoaShortest(bitSize int, val32 float32, val64 float64) *errorInfo {
-	test, ok := newTestInfo(bitSize, val32, val64)
+// utility function for testing
+func RunDragonboxFtoa(val float64, bitSize int) (string, time.Duration) {
+	test, ok := newTestInfo(val, bitSize)
 	if !ok {
-		return nil
-	}
-
-	val := test.val
-	neg := test.neg
-	mant := test.mant
-	exp := test.exp
-	flt := test.flt
-	denorm := test.denorm
-
-	var digs1 decimalSlice
-	var dbuf1 [32]byte
-	digs1.d = dbuf1[:]
-	dragonboxFtoa(&digs1, mant, exp-int(flt.mantbits), denorm, bitSize)
-
-	var digs2 decimalSlice
-	var dbuf2 [32]byte
-	digs2.d = dbuf2[:]
-	ryuFtoaShortest(&digs2, mant, exp-int(flt.mantbits), flt)
-
-	var fbuf1 [32]byte
-	prec1 := max(digs1.nd-1, 0)
-	res1 := string(formatDigits(fbuf1[:0], true, neg, digs1, prec1, 'e'))
-
-	var fbuf2 [32]byte
-	prec2 := max(digs2.nd-1, 0)
-	res2 := string(formatDigits(fbuf2[:0], true, neg, digs2, prec2, 'e'))
-
-	if res1 != res2 {
-		return &errorInfo{val, res1, res2}
-	}
-	return nil
-}
-
-// utility function for benchmarking
-func RunDragonboxFtoa(bitSize int, val32 float32, val64 float64) {
-	test, ok := newTestInfo(bitSize, val32, val64)
-	if !ok {
-		return
+		return "", 0
 	}
 
 	neg := test.neg
@@ -1205,18 +1155,22 @@ func RunDragonboxFtoa(bitSize int, val32 float32, val64 float64) {
 	var digs decimalSlice
 	var dbuf [32]byte
 	digs.d = dbuf[:]
+	start := time.Now()
 	dragonboxFtoa(&digs, mant, exp-int(flt.mantbits), denorm, bitSize)
+	elapsed := time.Since(start)
 
 	var fbuf [32]byte
 	prec := max(digs.nd-1, 0)
-	formatDigits(fbuf[:0], true, neg, digs, prec, 'e')
+	output := string(formatDigits(fbuf[:0], true, neg, digs, prec, 'e'))
+
+	return output, elapsed
 }
 
-// utility function for benchmarking
-func RunRyuFtoaShortest(bitSize int, val32 float32, val64 float64) {
-	test, ok := newTestInfo(bitSize, val32, val64)
+// utility function for testing
+func RunRyuFtoaShortest(val float64, bitSize int) (string, time.Duration) {
+	test, ok := newTestInfo(val, bitSize)
 	if !ok {
-		return
+		return "", 0
 	}
 
 	neg := test.neg
@@ -1227,9 +1181,13 @@ func RunRyuFtoaShortest(bitSize int, val32 float32, val64 float64) {
 	var digs decimalSlice
 	var dbuf [32]byte
 	digs.d = dbuf[:]
+	start := time.Now()
 	ryuFtoaShortest(&digs, mant, exp-int(flt.mantbits), flt)
+	elapsed := time.Since(start)
 
 	var fbuf [32]byte
 	prec := max(digs.nd-1, 0)
-	formatDigits(fbuf[:0], true, neg, digs, prec, 'e')
+	output := string(formatDigits(fbuf[:0], true, neg, digs, prec, 'e'))
+
+	return output, elapsed
 }
