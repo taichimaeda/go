@@ -6,6 +6,7 @@ package strconv
 
 import (
 	"math"
+	"math/bits"
 	"time"
 )
 
@@ -41,8 +42,8 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 		// try bigger divisor
 		q := zi / 10
 		if q*10 >= xi {
-			dragonboxDigits(d, q, minusK+1)
-			removeTrailingZeros(d)
+			decMant, decExp := removeTrailingZeros64(q, minusK+1)
+			dragonboxDigits(d, decMant, decExp)
 			return
 		}
 
@@ -80,8 +81,8 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 
 	if r < deltaI { // likely
 		if r != 0 || !zIsInt || mant%2 == 0 { // likely
-			dragonboxDigits(d, q, minusK+kappa+1)
-			removeTrailingZeros(d)
+			decMant, decExp := removeTrailingZeros64(q, minusK+kappa+1)
+			dragonboxDigits(d, decMant, decExp)
 			return
 		}
 		q--
@@ -89,8 +90,8 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	} else if r == deltaI { // unlikely
 		xParity, xIsInt := computeMulParity64(uint64(twoFc-1), cache, beta)
 		if xParity || (xIsInt && mant%2 == 0) {
-			dragonboxDigits(d, q, minusK+kappa+1)
-			removeTrailingZeros(d)
+			decMant, decExp := removeTrailingZeros64(q, minusK+kappa+1)
+			dragonboxDigits(d, decMant, decExp)
 			return
 		}
 	}
@@ -135,8 +136,8 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 
 		q := zi / 10
 		if q*10 >= xi {
-			dragonboxDigits(d, uint64(q), minusK+1)
-			removeTrailingZeros(d)
+			decMant, decExp := removeTrailingZeros32(q, minusK+1)
+			dragonboxDigits(d, uint64(decMant), decExp)
 			return
 		}
 
@@ -174,8 +175,8 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 
 	if r < deltaI { // likely
 		if r != 0 || !zIsInt || mant%2 == 0 { // likely
-			dragonboxDigits(d, uint64(q), minusK+kappa+1)
-			removeTrailingZeros(d)
+			decMant, decExp := removeTrailingZeros32(q, minusK+kappa+1)
+			dragonboxDigits(d, uint64(decMant), decExp)
 			return
 		}
 		q--
@@ -183,8 +184,8 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 	} else if r == deltaI { // unlikely
 		xParity, xIsInt := computeMulParity32(uint32(twoFc-1), cache, beta)
 		if xParity || (xIsInt && mant%2 == 0) {
-			dragonboxDigits(d, uint64(q), minusK+kappa+1)
-			removeTrailingZeros(d)
+			decMant, decExp := removeTrailingZeros32(q, minusK+kappa+1)
+			dragonboxDigits(d, uint64(decMant), decExp)
 			return
 		}
 	}
@@ -229,12 +230,6 @@ func dragonboxDigits(d *decimalSlice, mant uint64, exp int) {
 	d.d = d.d[n:]
 	d.nd = len(d.d)
 	d.dp = d.nd + exp // adjusts decimal point
-}
-
-func removeTrailingZeros(d *decimalSlice) {
-	for d.nd > 0 && d.d[d.nd-1] == '0' {
-		d.nd--
-	}
 }
 
 type uint128 struct {
@@ -396,6 +391,74 @@ func computeRoundUp64(cache uint128, beta int) uint64 {
 
 func computeRoundUp32(cache uint64, beta int) uint32 {
 	return uint32(cache>>(cacheBits32-mantBits32-2-beta)+1) / 2
+}
+
+// removes trailing zeros in decimal (not binary)
+func removeTrailingZeros64(mant uint64, exp int) (uint64, int) {
+	r := bits.RotateLeft64(mant*28999941890838049, -8)
+	b := r < 184467440738
+	s := 0
+	if b { // TODO: make this branchless
+		s++
+		mant = r
+	}
+
+	r = bits.RotateLeft64(mant*182622766329724561, -4)
+	b = r < 1844674407370956
+	s = s * 2
+	if b {
+		s++
+		mant = r
+	}
+
+	r = bits.RotateLeft64(mant*10330176681277348905, -2)
+	b = r < 184467440737095517
+	s = s * 2
+	if b {
+		s++
+		mant = r
+	}
+
+	r = bits.RotateLeft64(mant*14757395258967641293, -1)
+	b = r < 1844674407370955162
+	s = s * 2
+	if b {
+		s++
+		mant = r
+	}
+
+	exp += s
+	return mant, exp
+}
+
+// removes trailing zeros in decimal (not binary)
+func removeTrailingZeros32(mant uint32, exp int) (uint32, int) {
+	r := bits.RotateLeft32(mant*184254097, -4)
+	b := r < 429497
+	s := 0
+	if b { // TODO: make this branchless
+		s++
+		mant = r
+	}
+
+	r = bits.RotateLeft32(mant*42949673, -2)
+	b = r < 42949673
+	s = s * 2
+	if b {
+		s++
+		mant = r
+	}
+
+	r = bits.RotateLeft32(mant*1288490189, -1)
+	b = r < 429496730
+	s = s * 2
+	if b {
+		s++
+		mant = r
+	}
+
+	exp += s
+	return mant, exp
 }
 
 const (
