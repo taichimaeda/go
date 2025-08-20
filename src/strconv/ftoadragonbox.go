@@ -43,28 +43,27 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 		xi := computeLeftEndpointForShorterIntervalCase64(cache, beta)
 		zi := computeRightEndpointForShorterIntervalCase64(cache, beta)
 
-		if !(binExp >= shorterIntervalLeftEndpointLowerThreshold64 &&
-			binExp <= shorterIntervalLeftEndpointUpperThreshold64) {
+		// left endpoint threshold [2, 3]
+		if !(binExp >= 2 && binExp <= 3) {
 			xi++
 		}
 
-		decMant := divideByPow10_64(zi, (((uint64(2)<<mantBits64)+1)/3+1)*20, 1)
-		if decMant*10 >= xi {
-			dragonboxDigits(d, decMant, minusK+1)
+		// try bigger divisor
+		q := zi / 10
+		if q*10 >= xi {
+			dragonboxDigits(d, q, minusK+1)
 			return
 		}
 
-		decMant = computeRoundUpForShorterIntervalCase64(cache, beta)
-		preferRoundDown := decMant%2 != 0
-
-		if preferRoundDown &&
-			binExp >= shorterIntervalTieLowerThreshold64 &&
-			binExp <= shorterIntervalTieUpperThreshold64 {
-			decMant--
-		} else if decMant < xi {
-			decMant++
+		q = computeRoundUpForShorterIntervalCase64(cache, beta)
+		// tie threshold [-77, -77]
+		if q%2 != 0 && binExp == -77 {
+			q-- // round to even
+		} else if q < xi {
+			q++
 		}
-		dragonboxDigits(d, decMant, minusK)
+
+		dragonboxDigits(d, q, minusK)
 		return
 	}
 
@@ -80,53 +79,41 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	zIntPart, zIsInt := computeMul64(uint64(twoFc|1)<<beta, cache)
 
 	// step 2: try larger divisor
-	const bigDivisor = 1000
-	const smallDivisor = 100
+	const bigDivisor = 1000  // 10^(kappa+1)
+	const smallDivisor = 100 // 10^kappa
 
-	decMant := divideByPow10_64(zIntPart, (uint64(2)<<mantBits64)*bigDivisor-1, kappa+1)
-	r := uint64(zIntPart - bigDivisor*decMant)
+	q := zIntPart / bigDivisor
+	r := uint64(zIntPart - bigDivisor*q)
 
-	even := mant%2 == 0
-	includeLeftEndpoint := even
-	includeRightEndpoint := even
-
-	// adjusted control flow from reference impl
-	// but this may make code harder to understand
 	if r < deltaI {
-		if r != 0 || !zIsInt || includeRightEndpoint {
-			dragonboxDigits(d, decMant, minusK+kappa+1)
+		if r != 0 || !zIsInt || mant%2 == 0 {
+			dragonboxDigits(d, q, minusK+kappa+1)
 			return
 		}
-		decMant--
+		q--
 		r = bigDivisor
 	} else if r == deltaI {
 		xParity, xIsInt := computeMulParity64(uint64(twoFc-1), cache, beta)
-		if xParity || (xIsInt && includeLeftEndpoint) {
-			dragonboxDigits(d, decMant, minusK+kappa+1)
+		if xParity || (xIsInt && mant%2 == 0) {
+			dragonboxDigits(d, q, minusK+kappa+1)
 			return
 		}
 	}
 
 	// step 3: find the significand with the smaller divisor
-	decMant *= 10
+	q *= 10
 	dist := uint64(r - (deltaI / 2) + (smallDivisor / 2))
-	approxYParity := ((dist ^ (smallDivisor / 2)) & 1) != 0
-	dist, divisible := checkDivisibilityAndDivideByPow10(dist, kappa)
+	distQ := dist / smallDivisor
+	q += distQ
 
-	decMant += dist
-
-	if divisible {
+	if dist == distQ*smallDivisor {
+		approxYParity := ((dist ^ (smallDivisor / 2)) & 1) != 0
 		yParity, yIsInt := computeMulParity64(twoFc, cache, beta)
-		if yParity != approxYParity {
-			decMant--
-		} else {
-			preferRoundDown := decMant%2 != 0
-			if preferRoundDown && yIsInt {
-				decMant--
-			}
+		if yParity != approxYParity || (q%2 != 0 && yIsInt) {
+			q--
 		}
 	}
-	dragonboxDigits(d, decMant, minusK+kappa)
+	dragonboxDigits(d, q, minusK+kappa)
 }
 
 // TODO: this is almost an exact copy of dragonboxFtoa64
@@ -155,28 +142,26 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 		xi := computeLeftEndpointForShorterIntervalCase32(cache, beta)
 		zi := computeRightEndpointForShorterIntervalCase32(cache, beta)
 
-		if !(binExp >= shorterIntervalLeftEndpointLowerThreshold32 &&
-			binExp <= shorterIntervalLeftEndpointUpperThreshold32) {
+		// left endpoint threshold [2, 3]
+		if !(binExp >= 2 && binExp <= 3) {
 			xi++
 		}
 
-		decMant := divideByPow10_32(zi, (((uint32(2)<<mantBits32)+1)/3+1)*20, 1)
-		if decMant*10 >= xi {
-			dragonboxDigits(d, uint64(decMant), minusK+1)
+		q := zi / 10
+		if q*10 >= xi {
+			dragonboxDigits(d, uint64(q), minusK+1)
 			return
 		}
 
-		decMant = computeRoundUpForShorterIntervalCase32(cache, beta)
-		preferRoundDown := decMant%2 != 0
-
-		if preferRoundDown &&
-			binExp >= shorterIntervalTieLowerThreshold32 &&
-			binExp <= shorterIntervalTieUpperThreshold32 {
-			decMant--
-		} else if decMant < xi {
-			decMant++
+		q = computeRoundUpForShorterIntervalCase32(cache, beta)
+		// tie threshold [-35, -35]
+		if q%2 != 0 && binExp == -35 {
+			q-- // round to even
+		} else if q < xi {
+			q++
 		}
-		dragonboxDigits(d, uint64(decMant), minusK)
+
+		dragonboxDigits(d, uint64(q), minusK)
 		return
 	}
 
@@ -192,53 +177,41 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 	zIntPart, zIsInt := computeMul32(uint32(twoFc|1)<<beta, cache)
 
 	// step 2: try larger divisor
-	const bigDivisor = 100
-	const smallDivisor = 10
+	const bigDivisor = 100  // 10^(kappa+1)
+	const smallDivisor = 10 // 10^kappa
 
-	decMant := divideByPow10_32(zIntPart, (uint32(2)<<mantBits32)*bigDivisor-1, kappa+1)
-	r := uint32(zIntPart - bigDivisor*decMant)
+	q := zIntPart / bigDivisor
+	r := uint32(zIntPart - bigDivisor*q)
 
-	even := mant%2 == 0
-	includeLeftEndpoint := even
-	includeRightEndpoint := even
-
-	// adjusted control flow from reference impl
-	// but this may make code harder to understand
 	if r < deltaI {
-		if r != 0 || !zIsInt || includeRightEndpoint {
-			dragonboxDigits(d, uint64(decMant), minusK+kappa+1)
+		if r != 0 || !zIsInt || mant%2 == 0 {
+			dragonboxDigits(d, uint64(q), minusK+kappa+1)
 			return
 		}
-		decMant--
+		q--
 		r = bigDivisor
 	} else if r == deltaI {
 		xParity, xIsInt := computeMulParity32(uint32(twoFc-1), cache, beta)
-		if xParity || (xIsInt && includeLeftEndpoint) {
-			dragonboxDigits(d, uint64(decMant), minusK+kappa+1)
+		if xParity || (xIsInt && mant%2 == 0) {
+			dragonboxDigits(d, uint64(q), minusK+kappa+1)
 			return
 		}
 	}
 
 	// step 3: find the significand with the smaller divisor
-	decMant *= 10
+	q *= 10
 	dist := uint32(r - (deltaI / 2) + (smallDivisor / 2))
-	approxYParity := ((dist ^ (smallDivisor / 2)) & 1) != 0
-	dist, divisible := checkDivisibilityAndDivideByPow10(dist, kappa)
+	distQ := dist / smallDivisor
+	q += distQ
 
-	decMant += dist
-
-	if divisible {
+	if dist == distQ*smallDivisor {
+		approxYParity := ((dist ^ (smallDivisor / 2)) & 1) != 0
 		yParity, yIsInt := computeMulParity32(twoFc, cache, beta)
-		if yParity != approxYParity {
-			decMant--
-		} else {
-			preferRoundDown := decMant%2 != 0
-			if preferRoundDown && yIsInt {
-				decMant--
-			}
+		if yParity != approxYParity || (q%2 != 0 && yIsInt) {
+			q--
 		}
 	}
-	dragonboxDigits(d, uint64(decMant), minusK+kappa)
+	dragonboxDigits(d, uint64(q), minusK+kappa)
 }
 
 func dragonboxDigits(d *decimalSlice, mant uint64, exp int) {
@@ -375,10 +348,6 @@ func computeMul32(u uint32, cache uint64) (intPart uint32, isInt bool) {
 }
 
 func computeMulParity64(twoF uint64, cache uint128, beta int) (parity bool, isInt bool) {
-	// if beta < 1 || beta >= 64 {
-	// 	panic("computeMulParity64: beta out of range")
-	// }
-
 	r := umul192Lower128(twoF, cache)
 	parity = ((r.hi >> (64 - beta)) & 1) != 0
 	isInt = ((uint64(r.hi << beta)) | (r.lo >> (64 - beta))) == 0
@@ -386,10 +355,6 @@ func computeMulParity64(twoF uint64, cache uint128, beta int) (parity bool, isIn
 }
 
 func computeMulParity32(twoF uint32, cache uint64, beta int) (parity bool, isInt bool) {
-	// if beta < 1 || beta > 32 {
-	// 	panic("computeMulParity32: beta out of range")
-	// }
-
 	r := umul96Lower64(twoF, cache)
 	parity = ((r >> (64 - beta)) & 1) != 0
 	isInt = uint32(r>>(32-beta)) == 0
@@ -404,92 +369,16 @@ func computeDelta32(cache uint64, beta int) uint32 {
 	return uint32(cache >> (cacheBits32 - 1 - beta))
 }
 
-// computes a^k by squaring
-func computePower[T uint32 | uint64](a T, k int) T {
-	// TODO: k should be known at compile time
-	// if k < 0 {
-	// 	panic("computePower: exponent must be non-negative")
-	// }
-
-	p := T(1)
-	for k > 0 {
-		if k%2 == 1 {
-			p *= a
-		}
-		k /= 2
-		a *= a
-	}
-	return p
-}
-
-// divides n by 10^k
-func divideByPow10_64(n, nMax uint64, k int) uint64 {
-	// TODO: k and nMax should be known at compile time
-	switch {
-	case k == 1 && nMax <= 4611686018427387908:
-		// special case: divide by 10
-		return umul128Upper64(n, 1844674407370955162)
-	case k == 3 && nMax <= 15534100272597517998:
-		// special case: divide by 1000
-		return umul128Upper64(n, 4722366482869645214) >> 8
-	default:
-		return n / computePower(uint64(10), k)
-	}
-}
-
-// divides n by 10^k
-func divideByPow10_32(n, nMax uint32, k int) uint32 {
-	// TODO: k and nMax should be known at compile time
-	switch {
-	case k == 1 && nMax <= 1073741828:
-		// special case: divide by 10
-		return uint32(umul64(n, 429496730) >> 32)
-	case k == 2:
-		// special case: divide by 100
-		return uint32(umul64(n, 1374389535) >> 37)
-	default:
-		return n / computePower(uint32(10), k)
-	}
-}
-
-func checkDivisibilityAndDivideByPow10[T uint32 | uint64](n T, k int) (divided T, ok bool) {
-	// if n > computePower(T(10), k+1) {
-	// 	panic("checkDivisibilityAndDivideByPow10: n exceeds allowed value")
-	// }
-
-	divideMagicNumbers := [2]uint32{6554, 656}
-	magicNumber := divideMagicNumbers[k-1]
-	prod := uint32(n * T(magicNumber))
-
-	mask := uint32((uint32(1) << 16) - 1)
-	result := (prod & mask) < magicNumber
-
-	n = T(prod >> 16)
-	return n, result
-}
-
 func floorLog10Pow2(e int) int {
-	// if e < -2620 || 2620 < e {
-	// 	panic("floorLog10Pow2: e out of range")
-	// }
-
 	return (e * 315653) >> 20
 }
 
 func floorLog2Pow10(e int) int {
-	// Formula itself holds on [-4003,4003]; restricted to [-1233,1233] to avoid overflow
-	// if e < -1233 || 1233 < e {
-	// 	panic("floorLog2Pow10: e out of range")
-	// }
-
+	// Formula itself holds on [-4003,4003]; restricted to [-1233,1233] to avoid overflo
 	return (e * 1741647) >> 19
 }
 
 func floorLog10Pow2MinusLog10_4Over3(e int) int {
-	// if e < -2985 || 2936 < e {
-	// 	panic("floorLog10Pow2MinusLog10_4Over3: e out of range")
-	// }
-
 	return (e*631305 - 261663) >> 21
 }
 
@@ -498,16 +387,6 @@ const (
 	cacheBits32 = 64
 	mantBits64  = 52
 	mantBits32  = 23
-
-	shorterIntervalLeftEndpointLowerThreshold64 = 2
-	shorterIntervalLeftEndpointUpperThreshold64 = 3
-	shorterIntervalLeftEndpointLowerThreshold32 = 2
-	shorterIntervalLeftEndpointUpperThreshold32 = 3
-
-	shorterIntervalTieLowerThreshold64 = -77
-	shorterIntervalTieUpperThreshold64 = -77
-	shorterIntervalTieLowerThreshold32 = -35
-	shorterIntervalTieUpperThreshold32 = -35
 )
 
 func computeLeftEndpointForShorterIntervalCase64(cache uint128, beta int) uint64 {
@@ -540,24 +419,14 @@ func computeRoundUpForShorterIntervalCase32(cache uint64, beta int) uint32 {
 
 const (
 	cacheMinK64 = -292
-	// cacheMaxK64 = 326
 	cacheMinK32 = -31
-	// cacheMaxK32 = 46
 )
 
 func getCache64(k int) uint128 {
-	// if k < cacheMinK64 || k > cacheMaxK64 {
-	// 	panic("getCache64: k out of range")
-	// }
-
 	return cache64[k-cacheMinK64]
 }
 
 func getCache32(k int) uint64 {
-	// if k < cacheMinK32 || k > cacheMaxK32 {
-	// 	panic("getCache32: k out of range")
-	// }
-
 	return cache32[k-cacheMinK32]
 }
 

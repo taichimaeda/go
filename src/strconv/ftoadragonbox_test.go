@@ -23,11 +23,9 @@ func randomFloat64FullRange() float64 {
 
 func TestFtoaDragonbox(t *testing.T) {
 	for i := 0; i < 1000000; i++ {
-		var bitSize int
+		bitSize := 64
 		if rand.Intn(2) == 0 {
 			bitSize = 32
-		} else {
-			bitSize = 64
 		}
 		val32 := randomFloat32FullRange()
 		val64 := randomFloat64FullRange()
@@ -52,11 +50,9 @@ func BenchmarkDragonboxFtoa(b *testing.B) {
 
 	tests := make([]input, b.N)
 	for i := 0; i < b.N; i++ {
-		var bitSize int
+		bitSize := 64
 		if rand.Intn(2) == 0 {
 			bitSize = 32
-		} else {
-			bitSize = 64
 		}
 		val32 := randomFloat32FullRange()
 		val64 := randomFloat64FullRange()
