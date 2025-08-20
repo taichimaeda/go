@@ -7,6 +7,7 @@ package strconv_test
 import (
 	"math"
 	"math/rand"
+	"strconv"
 	. "strconv"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ func randomFloat64FullRange() float64 {
 	return math.Float64frombits(bits)
 }
 
+// fuzz test against Ryu
 func TestFtoaDragonbox(t *testing.T) {
 	const iter = 100000
 
@@ -46,28 +48,66 @@ func TestFtoaDragonbox(t *testing.T) {
 	}
 }
 
-func BenchmarkDragonboxFtoa(b *testing.B) {
-	const numTests = 100000
-
+func BenchmarkDragonboxFtoaRandomBits(b *testing.B) {
+	const iter = 100000
 	var total1, total2 time.Duration
 
 	for b.Loop() {
-		for i := 0; i < numTests; i++ {
-			var bitSize int
+		for i := 0; i < iter; i++ {
+			// val := randomFloat64FullRange()
+			// bitSize := 64
+
 			var val float64
+			var bitSize int
 			switch rand.Intn(2) {
 			case 0:
-				bitSize = 32
 				val = float64(randomFloat32FullRange())
+				bitSize = 32
 			case 1:
-				bitSize = 64
 				val = randomFloat64FullRange()
+				bitSize = 64
 			}
 
 			_, elapsed1 := RunDragonboxFtoa(val, bitSize)
 			_, elapsed2 := RunRyuFtoaShortest(val, bitSize)
 			total1 += elapsed1
 			total2 += elapsed2
+		}
+	}
+
+	b.Logf("Duration:\nDragonbox: %d\nRyu: %d", total1, total2)
+}
+
+func BenchmarkDragonboxFtoaRandomDigits(b *testing.B) {
+	const iter = 100000
+	var total1, total2 time.Duration
+
+	for b.Loop() {
+		for n := 1; n <= 17; n++ {
+			for range iter {
+				// val := randomFloat64FullRange()
+				// bitSize := 64
+
+				var val float64
+				var bitSize int
+				switch rand.Intn(2) {
+				case 0:
+					val = float64(randomFloat32FullRange())
+					bitSize = 32
+				case 1:
+					val = randomFloat64FullRange()
+					bitSize = 64
+				}
+
+				// truncate to n digits
+				s := FormatFloat(val, 'e', n, bitSize)
+				parsed, _ := strconv.ParseFloat(s, bitSize)
+
+				_, elapsed1 := RunDragonboxFtoa(parsed, bitSize)
+				_, elapsed2 := RunRyuFtoaShortest(parsed, bitSize)
+				total1 += elapsed1
+				total2 += elapsed2
+			}
 		}
 	}
 
