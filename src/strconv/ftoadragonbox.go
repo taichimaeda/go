@@ -43,7 +43,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 		q := zi / 10
 		if q*10 >= xi {
 			decMant, decExp := removeTrailingZeros64(q, minusK+1)
-			dragonboxDigits(d, decMant, decExp)
+			dragonboxDigitsFast64(d, decMant, decExp)
 			return
 		}
 
@@ -55,7 +55,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 			q++
 		}
 
-		dragonboxDigits(d, q, minusK)
+		dragonboxDigitsFast64(d, q, minusK)
 		return
 	}
 
@@ -82,7 +82,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	if r < deltaI { // likely
 		if r != 0 || !zIsInt || mant%2 == 0 { // likely
 			decMant, decExp := removeTrailingZeros64(q, minusK+kappa+1)
-			dragonboxDigits(d, decMant, decExp)
+			dragonboxDigitsFast64(d, decMant, decExp)
 			return
 		}
 		q--
@@ -91,7 +91,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 		xParity, xIsInt := computeMulParity64(uint64(twoFc-1), cache, beta)
 		if xParity || (xIsInt && mant%2 == 0) {
 			decMant, decExp := removeTrailingZeros64(q, minusK+kappa+1)
-			dragonboxDigits(d, decMant, decExp)
+			dragonboxDigitsFast64(d, decMant, decExp)
 			return
 		}
 	}
@@ -109,7 +109,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 			q--
 		}
 	}
-	dragonboxDigits(d, q, minusK+kappa)
+	dragonboxDigitsFast64(d, q, minusK+kappa)
 }
 
 func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
@@ -137,7 +137,7 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 		q := zi / 10
 		if q*10 >= xi {
 			decMant, decExp := removeTrailingZeros32(q, minusK+1)
-			dragonboxDigits(d, uint64(decMant), decExp)
+			dragonboxDigitsFast32(d, decMant, decExp)
 			return
 		}
 
@@ -149,7 +149,7 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 			q++
 		}
 
-		dragonboxDigits(d, uint64(q), minusK)
+		dragonboxDigitsFast32(d, q, minusK)
 		return
 	}
 
@@ -176,7 +176,7 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 	if r < deltaI { // likely
 		if r != 0 || !zIsInt || mant%2 == 0 { // likely
 			decMant, decExp := removeTrailingZeros32(q, minusK+kappa+1)
-			dragonboxDigits(d, uint64(decMant), decExp)
+			dragonboxDigitsFast32(d, decMant, decExp)
 			return
 		}
 		q--
@@ -185,7 +185,7 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 		xParity, xIsInt := computeMulParity32(uint32(twoFc-1), cache, beta)
 		if xParity || (xIsInt && mant%2 == 0) {
 			decMant, decExp := removeTrailingZeros32(q, minusK+kappa+1)
-			dragonboxDigits(d, uint64(decMant), decExp)
+			dragonboxDigitsFast32(d, decMant, decExp)
 			return
 		}
 	}
@@ -203,7 +203,7 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 			q--
 		}
 	}
-	dragonboxDigits(d, uint64(q), minusK+kappa)
+	dragonboxDigitsFast32(d, q, minusK+kappa)
 }
 
 func dragonboxDigits(d *decimalSlice, mant uint64, exp int) {
@@ -228,6 +228,140 @@ func dragonboxDigits(d *decimalSlice, mant uint64, exp int) {
 
 	d.d = d.d[n:]
 	d.nd = len(d.d)
+	d.dp = d.nd + exp // adjusts decimal point
+}
+
+func print2Digits(buf []byte, i int, n int) {
+	buf[i+0] = smallsString[n*2+0]
+	buf[i+1] = smallsString[n*2+1]
+}
+
+func print9Digits(d *decimalSlice, block uint32) {
+	buf := d.d
+	if block < 100 {
+		// block has 1 or 2 digits
+		n := block
+		if n >= 10 {
+			buf[0] = smallsString[n*2+0]
+			buf[1] = smallsString[n*2+1]
+			d.nd += 2
+		} else {
+			buf[0] = byte(n + '0')
+			d.nd += 1
+		}
+	} else if block < 10000 {
+		// block has 3 or 4 digits
+		prod := uint64(block) * 42949673
+		n := int(prod >> 32)
+		if n >= 10 {
+			buf[0] = smallsString[n*2+0]
+			buf[1] = smallsString[n*2+1]
+			prod = uint64(uint32(prod)) * 100
+			print2Digits(buf, 0+2, int(prod>>32))
+			d.nd += 4
+		} else {
+			buf[0] = byte(n + '0')
+			prod = uint64(uint32(prod)) * 100
+			print2Digits(buf, 0+1, int(prod>>32))
+			d.nd += 3
+		}
+	} else if block < 1000000 {
+		// block has 5 or 6 digits
+		prod := uint64(block) * 429497
+		n := int(prod >> 32)
+		if n >= 10 {
+			buf[0] = smallsString[n*2+0]
+			buf[1] = smallsString[n*2+1]
+			prod = uint64(uint32(prod)) * 100
+			print2Digits(buf, 0+2, int(prod>>32))
+			prod = uint64(uint32(prod)) * 100
+			print2Digits(buf, 2+2, int(prod>>32))
+			d.nd += 6
+		} else {
+			buf[0] = byte(n + '0')
+			prod = uint64(uint32(prod)) * 100
+			print2Digits(buf, 0+1, int(prod>>32))
+			prod = uint64(uint32(prod)) * 100
+			print2Digits(buf, 2+1, int(prod>>32))
+			d.nd += 5
+		}
+	} else if block < 100000000 {
+		// block has 7 or 8 digits
+		prod := uint64(block) * 281474978
+		prod >>= 16
+		n := int(prod >> 32)
+		if n >= 10 {
+			buf[0] = smallsString[n*2+0]
+			buf[1] = smallsString[n*2+1]
+			prod = uint64(uint32(prod)) * 100
+			print2Digits(buf, 0+2, int(prod>>32))
+			prod = uint64(uint32(prod)) * 100
+			print2Digits(buf, 2+2, int(prod>>32))
+			prod = uint64(uint32(prod)) * 100
+			print2Digits(buf, 4+2, int(prod>>32))
+			d.nd += 8
+		} else {
+			buf[0] = byte(n + '0')
+			prod = uint64(uint32(prod)) * 100
+			print2Digits(buf, 0+1, int(prod>>32))
+			prod = uint64(uint32(prod)) * 100
+			print2Digits(buf, 2+1, int(prod>>32))
+			prod = uint64(uint32(prod)) * 100
+			print2Digits(buf, 4+1, int(prod>>32))
+			d.nd += 7
+		}
+	} else {
+		// block has 9 digits
+		prod := uint64(block) * 1441151882
+		prod >>= 25
+		n := int(prod >> 32)
+		buf[0] = byte(n + '0')
+		// compiler fails to unroll the constant iter loop
+		prod = uint64(uint32(prod)) * 100
+		print2Digits(buf, 0+1, int(prod>>32)) // should be inlined
+		prod = uint64(uint32(prod)) * 100
+		print2Digits(buf, 2+1, int(prod>>32))
+		prod = uint64(uint32(prod)) * 100
+		print2Digits(buf, 4+1, int(prod>>32))
+		prod = uint64(uint32(prod)) * 100
+		print2Digits(buf, 6+1, int(prod>>32))
+		d.nd += 9 // written 9 digits
+	}
+}
+
+func print8Digits(d *decimalSlice, block uint32) {
+	buf, ofs := d.d, d.nd
+	prod := uint64(block) * 281474978
+	prod >>= 16
+	prod++
+	// offset by d.nd since this may be called after print9Digits
+	print2Digits(buf, ofs+0, int(prod>>32))
+	prod = uint64(uint32(prod)) * 100
+	print2Digits(buf, ofs+0+2, int(prod>>32))
+	prod = uint64(uint32(prod)) * 100
+	print2Digits(buf, ofs+2+2, int(prod>>32))
+	prod = uint64(uint32(prod)) * 100
+	print2Digits(buf, ofs+4+2, int(prod>>32))
+	d.nd += 8
+}
+
+func dragonboxDigitsFast32(d *decimalSlice, mant uint32, exp int) {
+	print9Digits(d, mant)
+	d.dp = d.nd + exp // adjusts decimal point
+}
+
+// faster than (unrolled) lut
+// because division and modulo by 100 are highly optimized
+// compiler may emit about 5 instrs for each even with bit tricks
+func dragonboxDigitsFast64(d *decimalSlice, mant uint64, exp int) {
+	if mant < 100000000 {
+		print9Digits(d, uint32(mant))
+	} else {
+		first := uint32(mant / 100000000)
+		second := uint32(mant) - first*100000000
+		print9Digits(d, first)
+		print8Digits(d, second)
+	}
 	d.dp = d.nd + exp // adjusts decimal point
 }
 
