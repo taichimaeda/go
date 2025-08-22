@@ -76,7 +76,7 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	const bigDivisor = 1000  // 10^(kappa+1)
 	const smallDivisor = 100 // 10^kappa
 
-	q := zIntPart / bigDivisor
+	q := zIntPart / bigDivisor // division by 10^n is optimized by the compiler
 	r := uint32(zIntPart - bigDivisor*q)
 
 	if r < deltaI { // likely
@@ -209,22 +209,21 @@ func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
 func dragonboxDigits(d *decimalSlice, mant uint64, exp int) {
 	// similar to formatBits (adapted from ryuDigits)
 	n := len(d.d)
-	v := mant
+	v1, v2 := mant, uint64(0)
 
-	for v >= 100 {
-		v1, v2 := v/100, v%100
+	for v1 >= 100 {
+		v1, v2 = v1/100, v1%100
 		n -= 2
 		d.d[n+1] = smallsString[2*v2+1]
 		d.d[n+0] = smallsString[2*v2+0]
-		v = v1
 	}
-	if v > 0 {
+	if v1 > 0 {
 		n--
-		d.d[n] = smallsString[2*v+1]
+		d.d[n] = smallsString[2*v1+1]
 	}
-	if v >= 10 {
+	if v1 >= 10 {
 		n--
-		d.d[n] = smallsString[2*v]
+		d.d[n] = smallsString[2*v1]
 	}
 
 	d.d = d.d[n:]

@@ -54,19 +54,19 @@ func BenchmarkRunDragonboxFtoaRandomBits(b *testing.B) {
 
 	for b.Loop() {
 		for i := 0; i < iter; i++ {
-			val := randomFloat64FullRange()
-			bitSize := 64
+			// val := randomFloat64FullRange()
+			// bitSize := 64
 
-			// var val float64
-			// var bitSize int
-			// switch rand.Intn(2) {
-			// case 0:
-			// 	val = float64(randomFloat32FullRange())
-			// 	bitSize = 32
-			// case 1:
-			// 	val = randomFloat64FullRange()
-			// 	bitSize = 64
-			// }
+			var val float64
+			var bitSize int
+			switch rand.Intn(2) {
+			case 0:
+				val = float64(randomFloat32FullRange())
+				bitSize = 32
+			case 1:
+				val = randomFloat64FullRange()
+				bitSize = 64
+			}
 
 			_, elapsed1 := RunDragonboxFtoa(val, bitSize)
 			_, elapsed2 := RunRyuFtoaShortest(val, bitSize)
@@ -75,7 +75,8 @@ func BenchmarkRunDragonboxFtoaRandomBits(b *testing.B) {
 		}
 	}
 
-	b.Logf("Duration:\nDragonbox: %d\nRyu: %d", total1, total2)
+	percent := (1 - float64(total1)/float64(total2)) * 100
+	b.Logf("Duration:\nDragonbox: %d\nRyu: %d\nDragonbox is %f%% faster than Ryu", total1, total2, percent)
 }
 
 func BenchmarkRunDragonboxFtoaRandomDigits(b *testing.B) {
@@ -85,19 +86,19 @@ func BenchmarkRunDragonboxFtoaRandomDigits(b *testing.B) {
 	for b.Loop() {
 		for n := 1; n <= 17; n++ {
 			for range iter {
-				val := randomFloat64FullRange()
-				bitSize := 64
+				// val := randomFloat64FullRange()
+				// bitSize := 64
 
-				// var val float64
-				// var bitSize int
-				// switch rand.Intn(2) {
-				// case 0:
-				// 	val = float64(randomFloat32FullRange())
-				// 	bitSize = 32
-				// case 1:
-				// 	val = randomFloat64FullRange()
-				// 	bitSize = 64
-				// }
+				var val float64
+				var bitSize int
+				switch rand.Intn(2) {
+				case 0:
+					val = float64(randomFloat32FullRange())
+					bitSize = 32
+				case 1:
+					val = randomFloat64FullRange()
+					bitSize = 64
+				}
 
 				// truncate to n digits
 				s := FormatFloat(val, 'e', n, bitSize)
@@ -111,7 +112,8 @@ func BenchmarkRunDragonboxFtoaRandomDigits(b *testing.B) {
 		}
 	}
 
-	b.Logf("Duration:\nDragonbox: %d\nRyu: %d", total1, total2)
+	percent := (1 - float64(total1)/float64(total2)) * 100
+	b.Logf("Duration:\nDragonbox: %d\nRyu: %d\nDragonbox is %f%% faster than Ryu", total1, total2, percent)
 }
 
 func BenchmarkProfileDragonboxFtoa(b *testing.B) {
