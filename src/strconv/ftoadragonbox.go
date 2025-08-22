@@ -504,8 +504,8 @@ func computeLeftEndpoint64(cache uint128, beta int) uint64 {
 }
 
 func computeLeftEndpoint32(cache uint64, beta int) uint32 {
-	return uint32(cache-(cache>>(mantBits32+2))) >>
-		(cacheBits32 - mantBits32 - 1 - beta)
+	return uint32((cache - (cache >> (mantBits32 + 2))) >>
+		(cacheBits32 - mantBits32 - 1 - beta))
 }
 
 func computeRightEndpoint64(cache uint128, beta int) uint64 {
@@ -514,8 +514,8 @@ func computeRightEndpoint64(cache uint128, beta int) uint64 {
 }
 
 func computeRightEndpoint32(cache uint64, beta int) uint32 {
-	return uint32(cache+(cache>>(mantBits32+1))) >>
-		(cacheBits32 - mantBits32 - 1 - beta)
+	return uint32((cache + (cache >> (mantBits32 + 1))) >>
+		(cacheBits32 - mantBits32 - 1 - beta))
 }
 
 func computeRoundUp64(cache uint128, beta int) uint64 {
