@@ -1,4 +1,4 @@
-// Copyright 2021 The Go Authors. All rights reserved.
+// Copyright 2025 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -10,7 +10,26 @@ import (
 	"time"
 )
 
-// dragonboxFtoa formats mant*2^exp with shortest decimal significand digits
+// binary to decimal conversion using the Dragonbox algorithm by Junekey Jeon
+// Junekey Jeon has agreed to license this port under a BSD-style license,
+// specifically for inclusion in the Go source code.
+//
+// fixed-point precision format is not supported by the Dragonbox algorithm
+// so we continue to use Ryū-printf for this purpose
+// see https://github.com/jk-jeon/dragonbox/issues/38 for more details
+//
+// for binary to decimal rounding, uses round to nearest, tie to even
+// for decimal to binary rounding, assumes round to nearest, tie to even
+//
+// the original paper can be found at:
+// https://raw.githubusercontent.com/jk-jeon/dragonbox/master/other_files/Dragonbox.pdf
+//
+// the reference implementation in C++ can be found at:
+// https://github.com/jk-jeon/dragonbox/blob/6c7c925b571d54486b9ffae8d9d18a822801cbda/subproject/simple/include/simple_dragonbox.h
+
+// dragonboxFtoa computes the decimal significand and exponent
+// from the binary significand and exponent using the Dragonbox algorithm
+// and formats the decimal floating point number in d
 func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, denorm bool, bitSize int) {
 	if bitSize == 32 {
 		dragonboxFtoa32(d, uint32(mant), exp, denorm)
@@ -20,8 +39,24 @@ func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, denorm bool, bitSize i
 }
 
 func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
-	// mant and e are already adjusted
-	// i.e., mant == fc and exp == e
+	// a floating point number w is represented as
+	// w = (-1)^σ * Fw * 2^Ew, where:
+	// σ is the sign of w
+	// Fw is the significand of w
+	// Ew is the exponent of w
+	//
+	// fc = Fw * 2^p is the adjusted significand of w
+	// e = Ew - p is the adjusted exponent of w
+	// where p is the number of significand bits
+	// mant and exp should be adjusted before the call so that mant = fc and exp = e
+	//
+	// I ⊆ ℝ is the interval such that each r ∈ I rounds to w
+	// during decimal to binary conversion using round to nearest, tie to even
+	// Δ = length of the interval I
+	// wL = (w^- + w) / 2 is the left endpoint of the interval I
+	// wR = (w + w^+) / 2 is right endpoint of the interval I, where:
+	// w^+ is the largest floating point number smaller than w
+	// w^- is the smallest floating point number larger than w
 
 	// short path (denormalized and zero mantissa)
 	if mant == 0 {
@@ -30,202 +65,316 @@ func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
 	}
 
 	if mant == (1<<mantBits64) && !denorm {
-		// shorter interval case (Fc == 1 and Ew != Emin)
-		// c.f. Skeleton of Dragonbox, part 3
-		minusK := floorLog10Pow2MinusLog10_4Over3(exp)
-		beta := exp + floorLog2Pow10(-minusK)
-		cache := getCache64(-minusK)
-		xi := computeLeftEndpoint64(cache, beta)  // x^(i)
-		zi := computeRightEndpoint64(cache, beta) // z^(i)
+		// algorithm 5.6 (skeleton of Dragonbox, part 3)
+		// shorter interval case (Δ = 3*2^(e-2))
+		// Δ = 3*2^(e-2) is true iff Fw = 1 and Ew ≠ Emin
 
-		// for round to nearest, tie to even:
-		// x^(i) tilde = z^(i) if x is an integer and is contained in 10^(k0)I
-		// z^(i) tilde = z^(i) always
-		// left endpoint threshold is [2, 3] (see chapter 5.2.3)
-		if !(exp >= 2 && exp <= 3) {
-			xi++ // x^(i) tilde
+		// note that in the shorter interval case:
+		// k0 = -⌊log10(Δ)⌋
+		// x = 10^k0*wL, y = 10^k0*w, z = 10^k0*wR
+		// δ = z - x = (10^k0)*Δ
+
+		// compute -k0 using bit tricks (section 6.3)
+		// -k0 = ⌊log10(Δ)⌋ = ⌊log10(3*2^(e-2))⌋
+		//     = ⌊(e-2)*log10(2)+log10(3)⌋ = ⌊log10(2^e)-log10(4/3)⌋
+		minusK0 := floorLog10Pow2MinusLog10_4Over3(exp) // -k0 = ⌊log10(2^e)-log10(4/3)⌋
+
+		// compute x^(i) and z^(i) from the precomputed table of φ̃k0 (section 5.2.1)
+		beta := exp + floorLog2Pow10(-minusK0)  // β = e + ⌊k0*log2(10)⌋
+		phi := getCache64(-minusK0)             // φ̃k0
+		xi := computeLeftEndpoint64(phi, beta)  // x^(i)
+		zi := computeRightEndpoint64(phi, beta) // z^(i)
+
+		// compute x̃^(i) and z̃^(i) from x^(i) and z^(i)
+		// x̃^(i) = x^(i) if e ∈ [2, 3] and x ∈ 10^(k0)I (page 23)
+		// x̃^(i) = x^(i) + 1 otherwise
+		// x ∈ 10^(k0)I is always true for round to nearest, tie to even
+		// since Fw is even in the shorter interval case
+		if !(2 <= exp && exp <= 3) {
+			xi++ // x̃^(i) = x^(i) + 1
 		}
+		// z̃^(i) = z^(i) - 1 if e ∈ [0, 3] and z ∉ 10^(k0)I (page 23)
+		// z̃^(i) = z^(i) otherwise
+		// z ∉ 10^(k0)I is always false for round to nearest, tie to even,
+		// since Fw is even in the shorter interval case
+		// thus let z̃^(i) = z^(i)
 
-		// try bigger divisor
-		q := zi / 10
+		// check if I ∩ 10^(-k0+1)ℤ is non-empty
+		// if I ∩ 10^(-k0+1)ℤ is non-empty,
+		// the unique element in it has the smallest number of decimal significand digits (corollary 3.3)
+
+		// I ∩ 10^(-k0+1)ℤ is non-empty iff x̃^(i) ≤ ⌊z̃^(i)/10⌋*10 (proposition 5.5)
+		// in this case, ⌊z̃^(i)/10⌋*10^(-k0+1) is the unique element in I ∩ 10^(-k0+1)ℤ
+		q := zi / 10 // q = ⌊z̃^(i)/10⌋
 		if xi <= q*10 {
-			mant, exp := removeTrailingZeros64(q, minusK+1)
+			mant, exp := removeTrailingZeros64(q, minusK0+1)
 			dragonboxDigitsFast64(d, mant, exp)
 			return
 		}
 
-		y := computeRoundUp64(cache, beta) // y^(ru)
-		// tie threshold is [-77, -77] (see chapter 5.2.4)
-		if exp == -77 && y%2 != 0 {
-			y-- // y^(rd)
-		} else if y < xi {
-			y++ // y^(ru)+1
+		// find elements in I ∩ 10^(-k0)ℤ
+		// I ∩ 10^(-k0)ℤ is guaranteed to be non-empty (proposition 3.1)
+		// since I ∩ 10^(-k0+1)ℤ must be empty at this point,
+		// any element in I ∩ 10^(-k0)ℤ has the smallest number of decimal significand digits (corollary 3.3)
+
+		// compute y^(ru) = ⌊y+1/2⌋ (ru for round up)
+		// we compute y^(ru) directly unlike the normal interval case
+		yru := computeRoundUp64(phi, beta) // y^(ru) (section 5.2.2)
+
+		// check if y^(ru) = y^(rd) (page 17)
+		// note that y^(ru) = ⌊y+1/2⌋ and y^(rd) = ⌈y-1/2⌉
+		// y^(ru) = y^(rd)+1 iff the fractional part of y is 1/2
+		//                   iff e ∈ [-77, -77] for float64 (section 5.2.4)
+		// y^(ru) = y^(rd) otherwise
+		// tie happens between y^(ru) and y^(rd) if y^(ru) = y^(rd)+1
+		// so we need to break the tie according to the binary to decimal rounding mode
+		if exp == -77 && yru%2 != 0 {
+			yru-- // y^(rd) = y^(ru)-1
+		} else {
+			// check if y^(ru) is in 10^(k0)I
+			// neither y^(ru) nor y^(rd) are guaranteed to be in 10^(k0)I unlike the normal interval case
+			// so we need to check if x^(i) ≤ y^(ru), y^(rd) ≤ z^(i) explicitly (not <)
+
+			// y^(ru) is guaranteed to be at most z̃^(i), and;
+			// y^(ru)+1 is guaranteed to be in 10^(k0)I if y^(ru) is not in 10^(k0)I (page 23)
+			// therefore we have:
+			// if x^(i) ≤ y^(ru), then y^(ru)+1 is in 10^(k0)I
+			// if y^(ru) < x^(i), then y^(ru) is in 10^(k0)I
+			// since tie does not happen in this branch y^(ru) or y^(ru)+1 is the correct element in both cases
+			if yru < xi {
+				yru++ // y^(ru)+1
+			}
+			// both y^(ru) and y^(rd) are guaranteed to be in 10^(k0)I in the other branch
+			// since tie happens iff the fractional part of y is 1/2
+			//                   iff both y^(ru) and y^(rd) are equidistant from y
+			// thus no other integers could lie in 10^(k0)I otherwise
 		}
-		dragonboxDigitsFast64(d, y, minusK)
+		dragonboxDigitsFast64(d, yru, minusK0)
 		return
 	}
 
-	// normal interval case
-	const kappa = 2          // for float64 (see chapter 5.1.3)
-	const bigDivisor = 1000  // 10^(kappa+1)
-	const smallDivisor = 100 // 10^kappa
+	// normal interval case (Δ = 2^e)
+	// this is the case iff Fw ≠ 1 or Ew = Emin
 
-	mant2 := mant * 2
-	minusK := floorLog10Pow2(exp) - kappa
-	beta := exp + floorLog2Pow10(-minusK)
-	cache := getCache64(-minusK)
+	// note that in the normal interval case:
+	// k = k0 + κ
+	// x = 10^k*wL, y = 10^k*w, z = 10^k*wR
+	// δ = z-x = (10^k)*Δ
 
-	deltai := computeDelta64(cache, beta)
-	zi, zIsInt := computeMul64(uint64(mant2|1)<<beta, cache)
+	const kappa = 2           // κ = 2 for float64 (section 5.1.3)
+	const largeDivisor = 1000 // 10^(κ+1)
+	const smallDivisor = 100  // 10^κ
 
-	// try larger divisor
-	// I ∩ 10^(-k0+1) may be empty or non-empty at this point
-	// c.f. Skeleton of Dragonbox, part 1 (see 15)
-	s := zi / bigDivisor           // s is the quotient
-	r := uint32(zi - bigDivisor*s) // r is the remainder
+	// compute -k0 using bit tricks (section 6.1)
+	// -k = -k0 - κ = ⌊log10(Δ)⌋ - κ
+	//    = ⌊log10(2^e)⌋ - κ
+	minusK := floorLog10Pow2(exp) - kappa // -k = ⌊log10(2^e)⌋ - κ
 
+	// compute z^(i) from the precomputed table of φ̃k (section 5.1.5)
+	beta := exp + floorLog2Pow10(-minusK)                   // β = e + ⌊k*log2(10)⌋
+	phi := getCache64(-minusK)                              // φ̃k
+	zi, zIsInt := computeMul64(uint64(mant*2+1)<<beta, phi) // z^(i), true if z^(f) = 0
+
+	// compute δ^(i) from the precomputed table of φ̃k (section 5.1.4)
+	deltai := computeDelta64(phi, beta) // δ^(i)
+
+	// algorithm 5.2 (skeleton of Dragonbox, part 1)
+	// check if I ∩ 10^(-k0+1)ℤ is non-empty
+	// if I ∩ 10^(-k0+1)ℤ is non-empty,
+	// the unique element in it has the smallest number of decimal significand digits (corollary 3.3)
+
+	// divide z^(i) by 10^(κ+1)
+	// this should be optimized by the compiler to avoid integer division instructions
+	s := zi / largeDivisor           // s is the quotient
+	r := uint32(zi - largeDivisor*s) // r is the remainder
+
+	// check if I ∩ 10^(-k0+1)ℤ contains s and thus is non-empty (proposition 5.1):
+	// if I = [wL, wR] (i.e., Fw is even for round to nearest, tie to even),
+	// I ∩ 10^(-k0+1)ℤ contains s iff r+z^(f) ≤ δ
+	// if I = (wL, wR) (i.e., Fw is odd for round to nearest, tie to even),
+	// I ∩ 10^(-k0+1)ℤ contains s iff r+z^(f) < δ and (r ≠ 0 or z^(f) ≠ 0)
+	// we must make sure r ≠ 0 or z^(f) ≠ 0 if I = (wL, wR)
+	// since s will otherwise overlap with wR ∉ I if r = 0 and z^(f) = 0
 	if r < deltai {
-		includeR := mant%2 == 0 // true if wR ∈ I
-		if r != 0 || !zIsInt || includeR {
+		// r < δ^(i) in this branch
+		// if I = [wL, wR], r < δ^(i) implies r+z^(f) ≤ δ
+		// if I = (wL, wR), r < δ^(i) implies r+z^(f) < δ
+		if r != 0 || !zIsInt || mant%2 == 0 {
 			mant, exp := removeTrailingZeros64(s, minusK+kappa+1)
 			dragonboxDigitsFast64(d, mant, exp)
 			return
 		}
-		s--            // s tilde
-		r = bigDivisor // r tilde
+		// r = 0 at this point
+		// compute s̃ and r̃ in advance for the next part (page 17)
+		// this ensures D > 0 prior to the division of D by 10^κ (see below)
+		s--              // s̃ = s - 1 if r = 0
+		r = largeDivisor // r̃ = 10^(κ+1) if r = 0
 	} else if r == deltai {
-		includeL := mant%2 == 0 // true if wL ∈ I
-		xiParity, xIsInt := computeMulParity64(uint64(mant2-1), cache, beta)
-		if xiParity || (xIsInt && includeL) {
+		// r = δ^(i) in this branch
+		// if I = [wL, wR], r = δ^(i) and z^(f) ≤ δ^(f) implies r+z^(f) ≤ δ
+		// if I = (wL, wR), r = δ^(i) and z^(f) < δ^(f) implies r+z^(f) < δ
+
+		// check z^(f) < δ^(f) efficiently by the parity of x^(i) (page 15):
+		// z^(f) < δ^(f) iff x^(i) is odd
+		// z^(f) ≤ δ^(f) iff x^(i) is odd or z^(f) = δ^(f)
+		//               iff x^(i) is odd or x^(f) = 0
+		xiParity, xIsInt := computeMulParity64(uint64(mant*2-1), phi, beta)
+		if xiParity || (xIsInt && mant%2 == 0) {
 			mant, exp := removeTrailingZeros64(s, minusK+kappa+1)
 			dragonboxDigitsFast64(d, mant, exp)
 			return
 		}
+		// r ≠ 0 at this point since r = δ^(i) and δ^(i) ≥ 10^κ ≠ 0
+		// thus let s̃ = s and r̃ = r (page 17)
 	}
 
-	// try the smaller divisor
-	// I ∩ 10^(-k0)ℤ must be non-empty at this point
-	// c.f. Skeleton of Dragonbox, part 2 (see page 18)
-	D := uint32(r + (smallDivisor / 2) - (deltai / 2))
-	t := uint32(D / smallDivisor)    // t is the quotient
-	rhoIsZero := D == t*smallDivisor // rho is the remainder
-	y := 10*s + uint64(t)            // y^(ru)
+	// algorithm 5.4 (skeleton of Dragonbox, part 2)
+	// find elements in I ∩ 10^(-k0)ℤ
+	// I ∩ 10^(-k0)ℤ is guaranteed to be non-empty (proposition 3.1)
+	// since I ∩ 10^(-k0+1)ℤ must be empty at this point,
+	// any element in I ∩ 10^(-k0)ℤ has the smallest number of decimal significand digits (corollary 3.3)
 
-	if rhoIsZero {
-		yiParity, yIsInt := computeMulParity64(mant2, cache, beta)
+	// compute D = ⌊r̃+(10^κ/2)-ε^(i)⌋ where ε = δ/2 (page 17)
+	// D is a part of the floor term in y^(ru) (see below)
+	D := uint32(r + (smallDivisor / 2) - (deltai / 2))
+
+	// divide D by 10^κ
+	// this should be optimized by the compiler to avoid integer division instructions
+	t := uint32(D / smallDivisor) // t is the quotient
+	rho := D - t*smallDivisor     // ρ is the remainder
+
+	// compute y^(ru) = ⌊y/10^κ+1/2⌋
+	//                = 10s̃ + ⌊(D+(z^(f)-ε^(f)))/10^κ⌋
+	//                = 10s̃+t + ⌊(ρ+(z^(f)-ε^(f)))/10^κ⌋
+	// assuming the residue term ⌊(ρ+(z^(f)-ε^(f)))/10^κ⌋ is zero for now
+	yru := 10*s + uint64(t) // y^(ru) = 10s̃+t
+
+	if rho == 0 {
+		// the residue term ⌊(ρ+(z^(f)-ε^(f)))/10^κ⌋ in y^(ru) is non-zero (equals -1)
+		// if ρ = 0 and z^(f) < ε^(f)
+
+		// check z^(f) < ε^(f) efficiently by the parity of y^(i) (page 17):
+		// z^(f) < ε^(f) iff parity of y^(i) ≠ parity of z^(i) - ε^(i)
+		//               iff parity of y^(i) ≠ parity of (D - (10^κ)/2)
+		// parity of z^(i) - ε^(i) = parity of (D-(10^κ)/2)
+		// because D - (10^κ)/2 = r̃ − ε^(i) and parity of r̃ = parity of z^(i)
+		// since z^(i) = 10s̃ + r̃ = 2*5s̃ + r̃
+		yiParity, yIsInt := computeMulParity64(mant*2, phi, beta)
+		// parity of (D - (10^κ)/2) = parity of (D ⊕ (10^κ)/2) where ⊕ denotes bitwise XOR
 		yiParityApprox := (D^(smallDivisor/2))%2 != 0
-		if yiParity != yiParityApprox || (y%2 != 0 && yIsInt) {
-			y-- // y^(rd)
+		if yiParity != yiParityApprox {
+			yru-- // y^(ru) = 10s̃+t-1 (the residue term in y^(ru) is non-zero)
+		} else {
+			// check if y^(ru) = y^(rd) (page 17)
+			// note that y^(ru) = ⌊y/10^κ+1/2⌋ and y^(rd) = ⌈y/10^κ-1/2⌉
+			// y^(ru) = y^(rd)+1 iff the fractional part of y/10^κ is 1/2
+			//                   iff ρ = 0 and z^(f) - ε^(f) = 0
+			//                   iff ρ = 0 and y is an integer
+			// y^(ru) = y^(rd) otherwise
+			// tie happens between y^(ru) and y^(rd) if y^(ru) = y^(rd)+1
+			// so we need to break the tie according to the binary to decimal rounding mode
+			if yIsInt && yru%2 != 0 {
+				yru-- // y^(rd) = y^(ru)-1
+			}
+			// since tie only happens if z^(f) - ε^(f) = 0
+			// tie never happens in the other branch where z^(f) < ε^(f)
 		}
 	}
-	dragonboxDigitsFast64(d, y, minusK+kappa)
+	dragonboxDigitsFast64(d, yru, minusK+kappa)
 }
 
-// similar to dragonboxFtoa64
+// almost identical to dragonboxFtoa64
 // this is kept as a separate copy to minimize runtime overhead
 func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
-	// mant and e are already adjusted
-	// i.e., mant == fc and exp == e
-
-	// short path (denormalized and zero mantissa)
 	if mant == 0 {
 		d.nd, d.dp = 0, 0
 		return
 	}
 
 	if mant == (1<<mantBits32) && !denorm {
-		// shorter interval case (Fc == 1 and Ew != Emin)
-		// c.f. Skeleton of Dragonbox, part 3
-		minusK := floorLog10Pow2MinusLog10_4Over3(exp)
-		beta := exp + floorLog2Pow10(-minusK)
-		cache := getCache32(-minusK)
-		xi := computeLeftEndpoint32(cache, beta)  // x^(i)
-		zi := computeRightEndpoint32(cache, beta) // z^(i)
+		minusK0 := floorLog10Pow2MinusLog10_4Over3(exp)
 
-		// for round to nearest, tie to even:
-		// x^(i) tilde = z^(i) if x is an integer and is contained in 10^(k0)I
-		// z^(i) tilde = z^(i) always
-		// left endpoint threshold is [2, 3] (see chapter 5.2.3)
-		if !(exp >= 2 && exp <= 3) {
-			xi++ // x^(i) tilde
+		beta := exp + floorLog2Pow10(-minusK0)
+		phi := getCache32(-minusK0)
+		xi := computeLeftEndpoint32(phi, beta)
+		zi := computeRightEndpoint32(phi, beta)
+
+		if !(2 <= exp && exp <= 3) {
+			xi++
 		}
 
 		q := zi / 10
 		if xi <= q*10 {
-			mant, exp := removeTrailingZeros32(q, minusK+1)
+			mant, exp := removeTrailingZeros32(q, minusK0+1)
 			dragonboxDigitsFast32(d, mant, exp)
 			return
 		}
 
-		y := computeRoundUp32(cache, beta) // y^(ru)
-		// tie threshold is [-35, -35] (see chapter 5.2.4)
-		if exp == -35 && y%2 != 0 {
-			y-- // y^(rd)
-		} else if y < xi {
-			y++ // y^(ru)+1
+		yru := computeRoundUp32(phi, beta)
+		if exp == -35 && yru%2 != 0 {
+			yru--
+		} else if yru < xi {
+			yru++
 		}
-		dragonboxDigitsFast32(d, y, minusK)
+		dragonboxDigitsFast32(d, yru, minusK0)
 		return
 	}
 
-	// normal interval case (Fc != 1 or Ew == Emin)
-	const kappa = 1         // for float32 (see chapter 5.1.3)
-	const bigDivisor = 100  // 10^(kappa+1)
-	const smallDivisor = 10 // 10^kappa
+	const kappa = 1
+	const bigDivisor = 100
+	const smallDivisor = 10
 
-	mant2 := mant * 2
 	minusK := floorLog10Pow2(exp) - kappa
+
 	beta := exp + floorLog2Pow10(-minusK)
-	cache := getCache32(-minusK)
+	phi := getCache32(-minusK)
+	zi, zIsInt := computeMul32(uint32(mant*2+1)<<beta, phi)
 
-	deltai := computeDelta32(cache, beta)
-	zi, zIsInt := computeMul32(uint32(mant2|1)<<beta, cache)
+	deltai := computeDelta32(phi, beta)
 
-	// try larger divisor
-	// I ∩ 10^(-k0+1) may be empty or non-empty at this point
-	// c.f. Skeleton of Dragonbox, part 1 (see 15)
-	s := zi / bigDivisor           // s is the quotient
-	r := uint32(zi - bigDivisor*s) // r is the remainder
+	s := zi / bigDivisor
+	r := uint32(zi - bigDivisor*s)
 
 	if r < deltai {
-		includeR := mant%2 == 0 // true if wR∈I
-		if r != 0 || !zIsInt || includeR {
+		if r != 0 || !zIsInt || mant%2 == 0 {
 			mant, exp := removeTrailingZeros32(s, minusK+kappa+1)
 			dragonboxDigitsFast32(d, mant, exp)
 			return
 		}
-		s--            // s tilde
-		r = bigDivisor // r tilde
+		s--
+		r = bigDivisor
 	} else if r == deltai {
-		includeL := mant%2 == 0 // true if wL ∈ I
-		xiParity, xIsInt := computeMulParity32(mant2-1, cache, beta)
-		if xiParity || (xIsInt && includeL) {
+		xiParity, xIsInt := computeMulParity32(mant*2-1, phi, beta)
+		if xiParity || (xIsInt && mant%2 == 0) {
 			mant, exp := removeTrailingZeros32(s, minusK+kappa+1)
 			dragonboxDigitsFast32(d, mant, exp)
 			return
 		}
 	}
 
-	// try the smaller divisor
-	// I ∩ 10^(-k0)ℤ must be non-empty at this point
-	// c.f. Skeleton of Dragonbox, part 2 (see page 18)
 	D := uint32(r + (smallDivisor / 2) - (deltai / 2))
-	t := uint32(D / smallDivisor)    // t is the quotient
-	rhoIsZero := D == t*smallDivisor // rho is the remainder
-	y := 10*s + t                    // y^(ru)
 
-	if rhoIsZero {
-		yiParity, yIsInt := computeMulParity32(mant2, cache, beta)
+	t := uint32(D / smallDivisor)
+	rho := D - t*smallDivisor
+
+	yru := 10*s + t
+
+	if rho == 0 {
+		yiParity, yIsInt := computeMulParity32(mant*2, phi, beta)
 		yiParityApprox := (D^(smallDivisor/2))%2 != 0
-		if yiParity != yiParityApprox || (y%2 != 0 && yIsInt) {
-			y-- // y^(rd)
+		if yiParity != yiParityApprox {
+			yru--
+		} else {
+			if yIsInt && yru%2 != 0 {
+				yru--
+			}
 		}
 	}
-	dragonboxDigitsFast32(d, y, minusK+kappa)
+	dragonboxDigitsFast32(d, yru, minusK+kappa)
 }
 
+// similar to formatBits (adapted from ryuDigits)
 func dragonboxDigits(d *decimalSlice, mant uint64, exp int) {
-	// similar to formatBits (adapted from ryuDigits)
 	n := len(d.d)
 	v1, v2 := mant, uint64(0)
 
@@ -249,53 +398,94 @@ func dragonboxDigits(d *decimalSlice, mant uint64, exp int) {
 	d.dp = d.nd + exp // adjusts decimal point
 }
 
-func print2Digits(buf []byte, i int, n int) {
-	buf[i+0] = smallsString[n*2+0]
-	buf[i+1] = smallsString[n*2+1]
+// fast digit generation algorithm adapted from the original implementation by Junekey Jeon
+// as part of the Dragonbox algorithm, which in turn is inspired by James Anhalt's itoa algorithm.
+// faster than (unrolled) lut as this algorithm can reduce the number of multiplications almost by half.
+// see https://jk-jeon.github.io/posts/2022/02/jeaiii-algorithm/ for more details.
+//
+// the original itoa algorithm in C++ by James Anhalt can be found at:
+// https://github.com/jeaiii/itoa/blob/69308f65e87a9954f11f952ed04d551eabeee0ae/include/itoa/jeaiii_to_text.h
+//
+// the reference implementation in C++ by Junekey Jeon can be found at:
+// https://github.com/jk-jeon/dragonbox/blob/6c7c925b571d54486b9ffae8d9d18a822801cbda/source/dragonbox_to_chars.cpp
+
+// dragonboxDigitsFast64 emits decimal digits of mant in d for float64
+// and adjusts the decimal point based on exp
+func dragonboxDigitsFast64(d *decimalSlice, mant uint64, exp int) {
+	// mant should not have any trailing zeroes in decimal
+	// mant has at most ⌈log10(2^(52+1))⌉+1 = 16+1 = 17 decimal digits for float64
+	// note the +1 in 52+1 since the MSB is implicit in IEEE754
+	// note the +1 in 16+1 for the round trip guarantee
+	if mant < 100_000_000 {
+		// mant has 9 digits or less
+		print9Digits(d, uint32(mant))
+	} else {
+		// mant has 10 digits or more
+		// divide mant into two blocks of at most 9 and 8 digits respectively
+		first := uint32(mant / 100_000_000)        // first 9 digits
+		second := uint32(mant) - first*100_000_000 // last 8 digits
+		print9Digits(d, first)
+		print8Digits(d, second)
+	}
+	d.dp = d.nd + exp // adjusts decimal point
 }
 
+// dragonboxDigitsFast32 emits decimal digits of mant in d for float32
+// and adjusts the decimal point based on exp
+func dragonboxDigitsFast32(d *decimalSlice, mant uint32, exp int) {
+	// mant has at most ⌈log10(2^(23+1))⌉+1 = 8+1 = 9 decimal digits for float32
+	print9Digits(d, mant)
+	d.dp = d.nd + exp // adjusts decimal point
+}
+
+// print9Digits emits at most 9 decimal digits of block in d
 func print9Digits(d *decimalSlice, block uint32) {
 	buf := d.d
 	if block < 100 {
 		// block has 1 or 2 digits
-		n := block
+		n := int(block)
 		if n >= 10 {
-			buf[0] = smallsString[n*2+0]
-			buf[1] = smallsString[n*2+1]
+			// block has 2 digits
+			print2Digits(buf, 0, n)
 			d.nd += 2
 		} else {
+			// block has 1 digit
 			buf[0] = byte(n + '0')
 			d.nd += 1
 		}
-	} else if block < 10000 {
+	} else if block < 10_000 {
 		// block has 3 or 4 digits
+		// 42949673 = ⌈2^32 / 100⌉
 		prod := uint64(block) * 42949673
 		n := int(prod >> 32)
 		if n >= 10 {
-			buf[0] = smallsString[n*2+0]
-			buf[1] = smallsString[n*2+1]
+			// block has 4 digits
+			print2Digits(buf, 0, n)
 			prod = uint64(uint32(prod)) * 100
 			print2Digits(buf, 0+2, int(prod>>32))
 			d.nd += 4
 		} else {
+			// block has 3 digits
 			buf[0] = byte(n + '0')
 			prod = uint64(uint32(prod)) * 100
 			print2Digits(buf, 0+1, int(prod>>32))
 			d.nd += 3
 		}
-	} else if block < 1000000 {
+	} else if block < 1_000_000 {
 		// block has 5 or 6 digits
+		// 429497 = ⌈2^32 / 10,000⌉
 		prod := uint64(block) * 429497
 		n := int(prod >> 32)
 		if n >= 10 {
-			buf[0] = smallsString[n*2+0]
-			buf[1] = smallsString[n*2+1]
+			// block has 6 digits
+			print2Digits(buf, 0, n)
 			prod = uint64(uint32(prod)) * 100
 			print2Digits(buf, 0+2, int(prod>>32))
 			prod = uint64(uint32(prod)) * 100
 			print2Digits(buf, 2+2, int(prod>>32))
 			d.nd += 6
 		} else {
+			// block has 5 digits
 			buf[0] = byte(n + '0')
 			prod = uint64(uint32(prod)) * 100
 			print2Digits(buf, 0+1, int(prod>>32))
@@ -303,14 +493,15 @@ func print9Digits(d *decimalSlice, block uint32) {
 			print2Digits(buf, 2+1, int(prod>>32))
 			d.nd += 5
 		}
-	} else if block < 100000000 {
+	} else if block < 100_000_000 {
 		// block has 7 or 8 digits
+		// 281474978 = ⌈2^48 / 1,000,000⌉ + 1
 		prod := uint64(block) * 281474978
 		prod >>= 16
 		n := int(prod >> 32)
 		if n >= 10 {
-			buf[0] = smallsString[n*2+0]
-			buf[1] = smallsString[n*2+1]
+			// block has 8 digits
+			print2Digits(buf, 0, n)
 			prod = uint64(uint32(prod)) * 100
 			print2Digits(buf, 0+2, int(prod>>32))
 			prod = uint64(uint32(prod)) * 100
@@ -319,6 +510,7 @@ func print9Digits(d *decimalSlice, block uint32) {
 			print2Digits(buf, 4+2, int(prod>>32))
 			d.nd += 8
 		} else {
+			// block has 7 digits
 			buf[0] = byte(n + '0')
 			prod = uint64(uint32(prod)) * 100
 			print2Digits(buf, 0+1, int(prod>>32))
@@ -330,6 +522,7 @@ func print9Digits(d *decimalSlice, block uint32) {
 		}
 	} else {
 		// block has 9 digits
+		// 1441151882 = ⌈2^57 / 100,000,000⌉ + 1
 		prod := uint64(block) * 1441151882
 		prod >>= 25
 		n := int(prod >> 32)
@@ -347,8 +540,11 @@ func print9Digits(d *decimalSlice, block uint32) {
 	}
 }
 
+// print9Digits emits at most 8 decimal digits of block in d
 func print8Digits(d *decimalSlice, block uint32) {
+	// block has 8 digits
 	buf, ofs := d.d, d.nd
+	// 281474978 = ⌈2^48 / 1,000,000⌉ + 1
 	prod := uint64(block) * 281474978
 	prod >>= 16
 	prod++
@@ -363,43 +559,35 @@ func print8Digits(d *decimalSlice, block uint32) {
 	d.nd += 8
 }
 
-func dragonboxDigitsFast32(d *decimalSlice, mant uint32, exp int) {
-	print9Digits(d, mant)
-	d.dp = d.nd + exp // adjusts decimal point
+// print2Digits emits 2 decimal digits of n in buf starting at i
+// this should be inlined by the compiler within print9Digits or print8Digits
+// n should be in [0, 99]
+func print2Digits(buf []byte, i int, n int) {
+	buf[i+0] = smallsString[n*2+0]
+	buf[i+1] = smallsString[n*2+1]
 }
 
-// faster than (unrolled) lut
-// because division and modulo by 100 are highly optimized
-// compiler may emit about 5 instrs for each even with bit tricks
-func dragonboxDigitsFast64(d *decimalSlice, mant uint64, exp int) {
-	if mant < 100000000 {
-		print9Digits(d, uint32(mant))
-	} else {
-		first := uint32(mant / 100000000)
-		second := uint32(mant) - first*100000000
-		print9Digits(d, first)
-		print8Digits(d, second)
-	}
-	d.dp = d.nd + exp // adjusts decimal point
-}
-
+// uint128 represents 128-bit integer as a pair of high/low 64 bits
 type uint128 struct {
 	hi, lo uint64
 }
 
+// uadd128 returns the full 128 bits of u + n
 func uadd128(u uint128, n uint64) uint128 {
 	sum := uint64(u.lo + n)
 	if sum < u.lo {
-		u.hi++ // lo wrapped around
+		u.hi++ // lo is wrapped around
 	}
 	u.lo = sum
 	return u
 }
 
+// umul64 returns the full 64 bits of x * y
 func umul64(x, y uint32) uint64 {
 	return uint64(x) * uint64(y)
 }
 
+// umul96Upper64 returns the upper 64 bits (out of 96 bits) of x * y
 func umul96Upper64(x uint32, y uint64) uint64 {
 	yh := uint32(y >> 32)
 	yl := uint32(y)
@@ -410,10 +598,12 @@ func umul96Upper64(x uint32, y uint64) uint64 {
 	return xyh + (xyl >> 32)
 }
 
+// umul96Lower64 returns the lower 64 bits (out of 96 bits) of x * y
 func umul96Lower64(x uint32, y uint64) uint64 {
 	return uint64(uint64(x) * y)
 }
 
+// umul128 returns the full 128 bits of x * y
 func umul128(x, y uint64) uint128 {
 	a := uint32(x >> 32)
 	b := uint32(x)
@@ -432,6 +622,7 @@ func umul128(x, y uint64) uint128 {
 	return uint128{hi, lo}
 }
 
+// umul128Upper64 returns the upper 64 bits (out of 128 bits) of x * y
 func umul128Upper64(x, y uint64) uint64 {
 	a := uint32(x >> 32)
 	b := uint32(x)
@@ -448,110 +639,138 @@ func umul128Upper64(x, y uint64) uint64 {
 	return ac + (intermediate >> 32) + (ad >> 32) + (bc >> 32)
 }
 
+// umul192Upper128 returns the upper 128 bits (out of 192 bits) of x * y
 func umul192Upper128(x uint64, y uint128) uint128 {
 	r := umul128(x, y.hi)
 	t := umul128Upper64(x, y.lo)
 	return uadd128(r, t)
 }
 
+// umul192Lower128 returns the lower 128 bits (out of 192 bits) of x * y
 func umul192Lower128(x uint64, y uint128) uint128 {
 	high := x * y.hi
 	highLow := umul128(x, y.lo)
 	return uint128{uint64(high + highLow.hi), highLow.lo}
 }
 
-func computeMul64(u uint64, cache uint128) (intPart uint64, isInt bool) {
-	r := umul192Upper128(u, cache)
+// computeMul64 computes x^(i), y^(i), z^(i)
+// from the precomputed value of φ̃k for float64
+// and also checks if x^(f), y^(f), z^(f) == 0 (section 5.2.1)
+func computeMul64(u uint64, phi uint128) (intPart uint64, isInt bool) {
+	r := umul192Upper128(u, phi)
 	intPart = r.hi
 	isInt = r.lo == 0
 	return
 }
 
-func computeMul32(u uint32, cache uint64) (intPart uint32, isInt bool) {
-	r := umul96Upper64(u, cache)
+// computeMul64 computes x^(i), y^(i), z^(i)
+// from the precomputed value of φ̃k for float32
+// and also checks if x^(f), y^(f), z^(f) == 0 (section 5.2.1)
+func computeMul32(u uint32, phi uint64) (intPart uint32, isInt bool) {
+	r := umul96Upper64(u, phi)
 	intPart = uint32(r >> 32)
 	isInt = uint32(r) == 0
 	return
 }
 
-func computeMulParity64(twoF uint64, cache uint128, beta int) (parity bool, isInt bool) {
-	r := umul192Lower128(twoF, cache)
+// computeMul64 computes only the parity of x^(i), y^(i), z^(i)
+// from the precomputed value of φ̃k for float64
+// and also checks if x^(f), y^(f), z^(f) = 0 (section 5.2.1)
+func computeMulParity64(mant2 uint64, phi uint128, beta int) (parity bool, isInt bool) {
+	r := umul192Lower128(mant2, phi)
 	parity = ((r.hi >> (64 - beta)) & 1) != 0
 	isInt = ((uint64(r.hi << beta)) | (r.lo >> (64 - beta))) == 0
 	return
 }
 
-func computeMulParity32(twoF uint32, cache uint64, beta int) (parity bool, isInt bool) {
-	r := umul96Lower64(twoF, cache)
+// computeMul64 computes only the parity of x^(i), y^(i), z^(i)
+// from the precomputed value of φ̃k for float32
+// and also checks if x^(f), y^(f), z^(f) = 0 (section 5.2.1)
+func computeMulParity32(mant2 uint32, phi uint64, beta int) (parity bool, isInt bool) {
+	r := umul96Lower64(mant2, phi)
 	parity = ((r >> (64 - beta)) & 1) != 0
 	isInt = uint32(r>>(32-beta)) == 0
 	return
 }
 
-func computeDelta64(cache uint128, beta int) uint32 {
-	return uint32(cache.hi >> (cacheBits64/2 - 1 - beta))
+// computeDelta64 computes δ^(i) from the precomputed value of φ̃k for float64
+func computeDelta64(phi uint128, beta int) uint32 {
+	return uint32(phi.hi >> (cacheBits64/2 - 1 - beta))
 }
 
-func computeDelta32(cache uint64, beta int) uint32 {
-	return uint32(cache >> (cacheBits32 - 1 - beta))
+// computeDelta64 computes δ^(i) from the precomputed value of φ̃k for float32
+func computeDelta32(phi uint64, beta int) uint32 {
+	return uint32(phi >> (cacheBits32 - 1 - beta))
 }
 
+// floorLog10Pow2 computes ⌊log10(2^e)⌋ = ⌊e*log10(2)⌋ (section 6.1)
 func floorLog10Pow2(e int) int {
+	// e should be in [-2620, 2620]
 	return (e * 315653) >> 20
 }
 
+// floorLog2Pow10 computes ⌊log2(10^e)⌋ = ⌊e*log2(10)⌋ (section 6.2)
 func floorLog2Pow10(e int) int {
-	// formula itself holds on [-4003,4003]
-	// restricted to [-1233,1233] to avoid overflow
+	// e should be in [-1233, 1233]
+	// formula itself holds on [-4003, 4003] but restricted to avoid overflow
 	return (e * 1741647) >> 19
 }
 
+// floorLog10Pow2MinusLog10_4Over3 computes
+// ⌊e*log10(2)-log10(4/3)⌋ = ⌊log10(2^e)-log10(4/3)⌋ (section 6.3)
 func floorLog10Pow2MinusLog10_4Over3(e int) int {
+	// e should be in [-2985, 2936]
 	return (e*631305 - 261663) >> 21
 }
 
 const (
-	cacheBits64 = 128
-	cacheBits32 = 64
-	mantBits64  = 52
-	mantBits32  = 23
+	cacheBits64 = 128 // Q = 2*q = 128 for float64
+	cacheBits32 = 64  // Q = 2*q = 64 for float32
+	mantBits64  = 52  // p = 52 for float64
+	mantBits32  = 23  // p = 23 for flaot32
 )
 
-func computeLeftEndpoint64(cache uint128, beta int) uint64 {
-	return (cache.hi - (cache.hi >> (mantBits64 + 2))) >>
+// computeLeftEndpoint64 computes integer part of the left endpoint x
+func computeLeftEndpoint64(phi uint128, beta int) uint64 {
+	return (phi.hi - (phi.hi >> (mantBits64 + 2))) >>
 		(cacheBits64/2 - mantBits64 - 1 - beta)
 }
 
-func computeLeftEndpoint32(cache uint64, beta int) uint32 {
-	return uint32((cache - (cache >> (mantBits32 + 2))) >>
+// computeLeftEndpoint32 computes integer part of the left endpoint x
+func computeLeftEndpoint32(phi uint64, beta int) uint32 {
+	return uint32((phi - (phi >> (mantBits32 + 2))) >>
 		(cacheBits32 - mantBits32 - 1 - beta))
 }
 
-func computeRightEndpoint64(cache uint128, beta int) uint64 {
-	return (cache.hi + (cache.hi >> (mantBits64 + 1))) >>
+// computeRightEndpoint64 computes integer part of the right endpoint z
+func computeRightEndpoint64(phi uint128, beta int) uint64 {
+	return (phi.hi + (phi.hi >> (mantBits64 + 1))) >>
 		(cacheBits64/2 - mantBits64 - 1 - beta)
 }
 
-func computeRightEndpoint32(cache uint64, beta int) uint32 {
-	return uint32((cache + (cache >> (mantBits32 + 1))) >>
+// computeRightEndpoint32 computes integer part of the right endpoint z
+func computeRightEndpoint32(phi uint64, beta int) uint32 {
+	return uint32((phi + (phi >> (mantBits32 + 1))) >>
 		(cacheBits32 - mantBits32 - 1 - beta))
 }
 
-func computeRoundUp64(cache uint128, beta int) uint64 {
-	return (cache.hi>>(cacheBits64/2-mantBits64-2-beta) + 1) / 2
+// computeRoundUp64 computes the round up of y (i.e., y^(ru))
+func computeRoundUp64(phi uint128, beta int) uint64 {
+	return (phi.hi>>(cacheBits64/2-mantBits64-2-beta) + 1) / 2
 }
 
-func computeRoundUp32(cache uint64, beta int) uint32 {
-	return uint32(cache>>(cacheBits32-mantBits32-2-beta)+1) / 2
+// computeRoundUp32 computes the round up of y (i.e., y^(ru))
+func computeRoundUp32(phi uint64, beta int) uint32 {
+	return uint32(phi>>(cacheBits32-mantBits32-2-beta)+1) / 2
 }
 
-// removes trailing zeros in decimal (not binary)
-// there are at most 15 trailing zeros (see page 16)
+// removes trailing zeros in decimal digits
+// there are at most 15 trailing zeros for float64 (page 16)
 func removeTrailingZeros64(mant uint64, exp int) (uint64, int) {
 	r := bits.RotateLeft64(mant*28999941890838049, -8)
 	b := r < 184467440738
 	s := 0
-	if b { // TODO: make this branchless
+	if b { // TODO: make this branchless if necessary
 		s++
 		mant = r
 	}
@@ -584,13 +803,13 @@ func removeTrailingZeros64(mant uint64, exp int) (uint64, int) {
 	return mant, exp
 }
 
-// removes trailing zeros in decimal (not binary)
-// there are at most 7 trailing zeros (see page 16)
+// removes trailing zeros in decimal digits
+// there are at most 7 trailing zeros for float32 (page 16)
 func removeTrailingZeros32(mant uint32, exp int) (uint32, int) {
 	r := bits.RotateLeft32(mant*184254097, -4)
 	b := r < 429497
 	s := 0
-	if b { // TODO: make this branchless
+	if b { // TODO: make this branchless if necessary
 		s++
 		mant = r
 	}
@@ -616,18 +835,27 @@ func removeTrailingZeros32(mant uint32, exp int) (uint32, int) {
 }
 
 const (
-	cacheMinK64 = -292
-	cacheMinK32 = -31
+	cacheMinK64 = -292 // k ∈ [-292, 326] for float64 (section 6.2)
+	cacheMinK32 = -31  // k ∈ [-31, 46] for float32 (section 6.2)
 )
 
+// getCache64 gets the precomputed value of φ̃̃k for float64
 func getCache64(k int) uint128 {
 	return cache64[k-cacheMinK64]
 }
 
+// getCache32 gets the precomputed value of φ̃̃k for float32
 func getCache32(k int) uint64 {
 	return cache32[k-cacheMinK32]
 }
 
+// precomputed table of φ̃̃k for float64
+// note that φ̃̃k = ⌈φk⌉ and φk = 10^k*2^(-e_k)
+// where e_k is the unique integer satisfying 2^(128-1) ≤ φk < 2^(128)
+//
+// φ̃̃k is chosen to satisfy ⌊n*2^(e-1)*10^k⌋ = ⌊2^β*n*φ̃̃k/2^128⌋
+// such that expressions of the form ⌊n*2^(e-1)*10^k⌋ (e.g., x^(i), y^(i), z^(i) and δ^(i))
+// can be computed efficiently using bit shifts and multiplications only
 var cache64 = [619]uint128{
 	{0xff77b1fcbebcdc4f, 0x25e8e89c13bb0f7b},
 	{0x9faacf3df73609b1, 0x77b191618c54e9ad},
@@ -1250,6 +1478,7 @@ var cache64 = [619]uint128{
 	{0xf70867153aa2db38, 0xb8cbee4fc66d1ea8},
 }
 
+// precomputed table of φ̃̃k for float32
 var cache32 = [78]uint64{
 	0x81ceb32c4b43fcf5, 0xa2425ff75e14fc32,
 	0xcad2f7f5359a3b3f, 0xfd87b5f28300ca0e,
