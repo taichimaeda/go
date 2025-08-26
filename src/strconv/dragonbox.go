@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// dragonboxFtoa formats mant*2^exp with shortest decimal significand digits
 func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, denorm bool, bitSize int) {
 	if bitSize == 32 {
 		dragonboxFtoa32(d, uint32(mant), exp, denorm)
@@ -19,191 +20,208 @@ func dragonboxFtoa(d *decimalSlice, mant uint64, exp int, denorm bool, bitSize i
 }
 
 func dragonboxFtoa64(d *decimalSlice, mant uint64, exp int, denorm bool) {
+	// mant and e are already adjusted
+	// i.e., mant == fc and exp == e
+
 	// short path (denormalized and zero mantissa)
 	if mant == 0 {
 		d.nd, d.dp = 0, 0
 		return
 	}
 
-	// shorter interval case
-	if mant == (1<<mantBits64) && !denorm { // unlikely
-		binExp := exp
-		minusK := floorLog10Pow2MinusLog10_4Over3(binExp)
-		beta := binExp + floorLog2Pow10(-minusK)
+	if mant == (1<<mantBits64) && !denorm {
+		// shorter interval case (Fc == 1 and Ew != Emin)
+		// c.f. Skeleton of Dragonbox, part 3
+		minusK := floorLog10Pow2MinusLog10_4Over3(exp)
+		beta := exp + floorLog2Pow10(-minusK)
 		cache := getCache64(-minusK)
-		xi := computeLeftEndpoint64(cache, beta)
-		zi := computeRightEndpoint64(cache, beta)
+		xi := computeLeftEndpoint64(cache, beta)  // x^(i)
+		zi := computeRightEndpoint64(cache, beta) // z^(i)
 
-		// left endpoint threshold [2, 3]
-		if !(binExp >= 2 && binExp <= 3) {
-			xi++
+		// for round to nearest, tie to even:
+		// x^(i) tilde = z^(i) if x is an integer and is contained in 10^(k0)I
+		// z^(i) tilde = z^(i) always
+		// left endpoint threshold is [2, 3] (see chapter 5.2.3)
+		if !(exp >= 2 && exp <= 3) {
+			xi++ // x^(i) tilde
 		}
 
 		// try bigger divisor
 		q := zi / 10
-		if q*10 >= xi {
-			decMant, decExp := removeTrailingZeros64(q, minusK+1)
-			dragonboxDigitsFast64(d, decMant, decExp)
+		if xi <= q*10 {
+			mant, exp := removeTrailingZeros64(q, minusK+1)
+			dragonboxDigitsFast64(d, mant, exp)
 			return
 		}
 
-		q = computeRoundUp64(cache, beta)
-		// tie threshold [-77, -77]
-		if q%2 != 0 && binExp == -77 {
-			q-- // round to even
-		} else if q < xi {
-			q++
+		y := computeRoundUp64(cache, beta) // y^(ru)
+		// tie threshold is [-77, -77] (see chapter 5.2.4)
+		if exp == -77 && y%2 != 0 {
+			y-- // y^(rd)
+		} else if y < xi {
+			y++ // y^(ru)+1
 		}
-
-		dragonboxDigitsFast64(d, q, minusK)
+		dragonboxDigitsFast64(d, y, minusK)
 		return
 	}
 
 	// normal interval case
-	// step 1: Schubfach multiplier calculation
-	const kappa = 2 // float64
-	// const kappa = 1 // float32
-	twoFc := mant * 2
-	binExp := exp
-	minusK := floorLog10Pow2(binExp) - kappa
-	beta := binExp + floorLog2Pow10(-minusK)
-	cache := getCache64(-minusK)
-
-	deltaI := computeDelta64(cache, beta)
-	zIntPart, zIsInt := computeMul64(uint64(twoFc|1)<<beta, cache)
-
-	// step 2: try larger divisor
+	const kappa = 2          // for float64 (see chapter 5.1.3)
 	const bigDivisor = 1000  // 10^(kappa+1)
 	const smallDivisor = 100 // 10^kappa
 
-	q := zIntPart / bigDivisor // division by 10^n is optimized by the compiler
-	r := uint32(zIntPart - bigDivisor*q)
+	mant2 := mant * 2
+	minusK := floorLog10Pow2(exp) - kappa
+	beta := exp + floorLog2Pow10(-minusK)
+	cache := getCache64(-minusK)
 
-	if r < deltaI { // likely
-		if r != 0 || !zIsInt || mant%2 == 0 { // likely
-			decMant, decExp := removeTrailingZeros64(q, minusK+kappa+1)
-			dragonboxDigitsFast64(d, decMant, decExp)
+	deltai := computeDelta64(cache, beta)
+	zi, zIsInt := computeMul64(uint64(mant2|1)<<beta, cache)
+
+	// try larger divisor
+	// I ∩ 10^(-k0+1) may be empty or non-empty at this point
+	// c.f. Skeleton of Dragonbox, part 1 (see 15)
+	s := zi / bigDivisor           // s is the quotient
+	r := uint32(zi - bigDivisor*s) // r is the remainder
+
+	if r < deltai {
+		includeR := mant%2 == 0 // true if wR ∈ I
+		if r != 0 || !zIsInt || includeR {
+			mant, exp := removeTrailingZeros64(s, minusK+kappa+1)
+			dragonboxDigitsFast64(d, mant, exp)
 			return
 		}
-		q--
-		r = bigDivisor
-	} else if r == deltaI { // unlikely
-		xParity, xIsInt := computeMulParity64(uint64(twoFc-1), cache, beta)
-		if xParity || (xIsInt && mant%2 == 0) {
-			decMant, decExp := removeTrailingZeros64(q, minusK+kappa+1)
-			dragonboxDigitsFast64(d, decMant, decExp)
+		s--            // s tilde
+		r = bigDivisor // r tilde
+	} else if r == deltai {
+		includeL := mant%2 == 0 // true if wL ∈ I
+		xiParity, xIsInt := computeMulParity64(uint64(mant2-1), cache, beta)
+		if xiParity || (xIsInt && includeL) {
+			mant, exp := removeTrailingZeros64(s, minusK+kappa+1)
+			dragonboxDigitsFast64(d, mant, exp)
 			return
 		}
 	}
 
-	// step 3: find the significand with the smaller divisor
-	q *= 10
-	dist := uint32(r - (deltaI / 2) + (smallDivisor / 2))
-	distQ := uint32(dist / smallDivisor)
-	q += uint64(distQ)
+	// try the smaller divisor
+	// I ∩ 10^(-k0)ℤ must be non-empty at this point
+	// c.f. Skeleton of Dragonbox, part 2 (see page 18)
+	D := uint32(r + (smallDivisor / 2) - (deltai / 2))
+	t := uint32(D / smallDivisor)    // t is the quotient
+	rhoIsZero := D == t*smallDivisor // rho is the remainder
+	y := 10*s + uint64(t)            // y^(ru)
 
-	if dist == distQ*smallDivisor { // likely
-		approxYParity := ((dist ^ (smallDivisor / 2)) & 1) != 0
-		yParity, yIsInt := computeMulParity64(twoFc, cache, beta)
-		if yParity != approxYParity || (q%2 != 0 && yIsInt) {
-			q--
+	if rhoIsZero {
+		yiParity, yIsInt := computeMulParity64(mant2, cache, beta)
+		yiParityApprox := (D^(smallDivisor/2))%2 != 0
+		if yiParity != yiParityApprox || (y%2 != 0 && yIsInt) {
+			y-- // y^(rd)
 		}
 	}
-	dragonboxDigitsFast64(d, q, minusK+kappa)
+	dragonboxDigitsFast64(d, y, minusK+kappa)
 }
 
+// similar to dragonboxFtoa64
+// this is kept as a separate copy to minimize runtime overhead
 func dragonboxFtoa32(d *decimalSlice, mant uint32, exp int, denorm bool) {
-	// TODO: this is almost an exact copy of dragonboxFtoa64
+	// mant and e are already adjusted
+	// i.e., mant == fc and exp == e
+
 	// short path (denormalized and zero mantissa)
 	if mant == 0 {
 		d.nd, d.dp = 0, 0
 		return
 	}
 
-	// shorter interval case
-	if mant == (1<<mantBits32) && !denorm { // unlikely
-		binExp := exp
-		minusK := floorLog10Pow2MinusLog10_4Over3(binExp)
-		beta := binExp + floorLog2Pow10(-minusK)
+	if mant == (1<<mantBits32) && !denorm {
+		// shorter interval case (Fc == 1 and Ew != Emin)
+		// c.f. Skeleton of Dragonbox, part 3
+		minusK := floorLog10Pow2MinusLog10_4Over3(exp)
+		beta := exp + floorLog2Pow10(-minusK)
 		cache := getCache32(-minusK)
-		xi := computeLeftEndpoint32(cache, beta)
-		zi := computeRightEndpoint32(cache, beta)
+		xi := computeLeftEndpoint32(cache, beta)  // x^(i)
+		zi := computeRightEndpoint32(cache, beta) // z^(i)
 
-		// left endpoint threshold [2, 3]
-		if !(binExp >= 2 && binExp <= 3) {
-			xi++
+		// for round to nearest, tie to even:
+		// x^(i) tilde = z^(i) if x is an integer and is contained in 10^(k0)I
+		// z^(i) tilde = z^(i) always
+		// left endpoint threshold is [2, 3] (see chapter 5.2.3)
+		if !(exp >= 2 && exp <= 3) {
+			xi++ // x^(i) tilde
 		}
 
 		q := zi / 10
-		if q*10 >= xi {
-			decMant, decExp := removeTrailingZeros32(q, minusK+1)
-			dragonboxDigitsFast32(d, decMant, decExp)
+		if xi <= q*10 {
+			mant, exp := removeTrailingZeros32(q, minusK+1)
+			dragonboxDigitsFast32(d, mant, exp)
 			return
 		}
 
-		q = computeRoundUp32(cache, beta)
-		// tie threshold [-35, -35]
-		if q%2 != 0 && binExp == -35 {
-			q-- // round to even
-		} else if q < xi {
-			q++
+		y := computeRoundUp32(cache, beta) // y^(ru)
+		// tie threshold is [-35, -35] (see chapter 5.2.4)
+		if exp == -35 && y%2 != 0 {
+			y-- // y^(rd)
+		} else if y < xi {
+			y++ // y^(ru)+1
 		}
-
-		dragonboxDigitsFast32(d, q, minusK)
+		dragonboxDigitsFast32(d, y, minusK)
 		return
 	}
 
-	// normal interval case
-	// step 1: Schubfach multiplier calculation
-	// const kappa = 2 // float64
-	const kappa = 1 // float32
-	twoFc := mant * 2
-	binExp := exp
-	minusK := floorLog10Pow2(binExp) - kappa
-	beta := binExp + floorLog2Pow10(-minusK)
-	cache := getCache32(-minusK)
-
-	deltaI := computeDelta32(cache, beta)
-	zIntPart, zIsInt := computeMul32(uint32(twoFc|1)<<beta, cache)
-
-	// step 2: try larger divisor
+	// normal interval case (Fc != 1 or Ew == Emin)
+	const kappa = 1         // for float32 (see chapter 5.1.3)
 	const bigDivisor = 100  // 10^(kappa+1)
 	const smallDivisor = 10 // 10^kappa
 
-	q := zIntPart / bigDivisor
-	r := uint32(zIntPart - bigDivisor*q)
+	mant2 := mant * 2
+	minusK := floorLog10Pow2(exp) - kappa
+	beta := exp + floorLog2Pow10(-minusK)
+	cache := getCache32(-minusK)
 
-	if r < deltaI { // likely
-		if r != 0 || !zIsInt || mant%2 == 0 { // likely
-			decMant, decExp := removeTrailingZeros32(q, minusK+kappa+1)
-			dragonboxDigitsFast32(d, decMant, decExp)
+	deltai := computeDelta32(cache, beta)
+	zi, zIsInt := computeMul32(uint32(mant2|1)<<beta, cache)
+
+	// try larger divisor
+	// I ∩ 10^(-k0+1) may be empty or non-empty at this point
+	// c.f. Skeleton of Dragonbox, part 1 (see 15)
+	s := zi / bigDivisor           // s is the quotient
+	r := uint32(zi - bigDivisor*s) // r is the remainder
+
+	if r < deltai {
+		includeR := mant%2 == 0 // true if wR∈I
+		if r != 0 || !zIsInt || includeR {
+			mant, exp := removeTrailingZeros32(s, minusK+kappa+1)
+			dragonboxDigitsFast32(d, mant, exp)
 			return
 		}
-		q--
-		r = bigDivisor
-	} else if r == deltaI { // unlikely
-		xParity, xIsInt := computeMulParity32(uint32(twoFc-1), cache, beta)
-		if xParity || (xIsInt && mant%2 == 0) {
-			decMant, decExp := removeTrailingZeros32(q, minusK+kappa+1)
-			dragonboxDigitsFast32(d, decMant, decExp)
+		s--            // s tilde
+		r = bigDivisor // r tilde
+	} else if r == deltai {
+		includeL := mant%2 == 0 // true if wL ∈ I
+		xiParity, xIsInt := computeMulParity32(mant2-1, cache, beta)
+		if xiParity || (xIsInt && includeL) {
+			mant, exp := removeTrailingZeros32(s, minusK+kappa+1)
+			dragonboxDigitsFast32(d, mant, exp)
 			return
 		}
 	}
 
-	// step 3: find the significand with the smaller divisor
-	q *= 10
-	dist := uint32(r - (deltaI / 2) + (smallDivisor / 2))
-	distQ := dist / smallDivisor
-	q += distQ
+	// try the smaller divisor
+	// I ∩ 10^(-k0)ℤ must be non-empty at this point
+	// c.f. Skeleton of Dragonbox, part 2 (see page 18)
+	D := uint32(r + (smallDivisor / 2) - (deltai / 2))
+	t := uint32(D / smallDivisor)    // t is the quotient
+	rhoIsZero := D == t*smallDivisor // rho is the remainder
+	y := 10*s + t                    // y^(ru)
 
-	if dist == distQ*smallDivisor { // likely
-		approxYParity := ((dist ^ (smallDivisor / 2)) & 1) != 0
-		yParity, yIsInt := computeMulParity32(twoFc, cache, beta)
-		if yParity != approxYParity || (q%2 != 0 && yIsInt) {
-			q--
+	if rhoIsZero {
+		yiParity, yIsInt := computeMulParity32(mant2, cache, beta)
+		yiParityApprox := (D^(smallDivisor/2))%2 != 0
+		if yiParity != yiParityApprox || (y%2 != 0 && yIsInt) {
+			y-- // y^(rd)
 		}
 	}
-	dragonboxDigitsFast32(d, q, minusK+kappa)
+	dragonboxDigitsFast32(d, y, minusK+kappa)
 }
 
 func dragonboxDigits(d *decimalSlice, mant uint64, exp int) {
@@ -483,7 +501,8 @@ func floorLog10Pow2(e int) int {
 }
 
 func floorLog2Pow10(e int) int {
-	// Formula itself holds on [-4003,4003]; restricted to [-1233,1233] to avoid overflo
+	// formula itself holds on [-4003,4003]
+	// restricted to [-1233,1233] to avoid overflow
 	return (e * 1741647) >> 19
 }
 
@@ -527,6 +546,7 @@ func computeRoundUp32(cache uint64, beta int) uint32 {
 }
 
 // removes trailing zeros in decimal (not binary)
+// there are at most 15 trailing zeros (see page 16)
 func removeTrailingZeros64(mant uint64, exp int) (uint64, int) {
 	r := bits.RotateLeft64(mant*28999941890838049, -8)
 	b := r < 184467440738
@@ -565,6 +585,7 @@ func removeTrailingZeros64(mant uint64, exp int) (uint64, int) {
 }
 
 // removes trailing zeros in decimal (not binary)
+// there are at most 7 trailing zeros (see page 16)
 func removeTrailingZeros32(mant uint32, exp int) (uint32, int) {
 	r := bits.RotateLeft32(mant*184254097, -4)
 	b := r < 429497
