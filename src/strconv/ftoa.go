@@ -117,11 +117,10 @@ func genericFtoa(dst []byte, val float64, fmt byte, prec, bitSize int) []byte {
 	// Negative precision means "only as much as needed to be exact."
 	shortest := prec < 0
 	if shortest {
-		// Use Ryu algorithm.
+		// Use the Dragonbox algorithm.
 		var buf [32]byte
 		digs.d = buf[:]
 		dragonboxFtoa(&digs, mant, exp-int(flt.mantbits), denorm, bitSize)
-		// ryuFtoaShortest(&digs, mant, exp-int(flt.mantbits), flt)
 		ok = true
 		// Precision for shortest representation mode.
 		switch fmt {
