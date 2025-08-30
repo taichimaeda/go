@@ -5,7 +5,9 @@
 package strconv
 
 import (
+	"math"
 	"math/bits"
+	"time"
 )
 
 // Binary to decimal conversion using the Dragonbox algorithm by Junekey Jeon.
@@ -1510,4 +1512,143 @@ var cache32 = [78]uint64{
 	0x92efd1b8d0cf37bf, 0xb7abc627050305ae,
 	0xe596b7b0c643c71a, 0x8f7e32ce7bea5c70,
 	0xb35dbf821ae4f38c, 0xe0352f62a19e306f,
+}
+
+type testInfo struct {
+	val    float64
+	neg    bool
+	mant   uint64
+	exp    int
+	denorm bool
+	flt    *floatInfo
+}
+
+// A utility function for testing.
+func newTestInfo(val float64, bitSize int) (testInfo, bool) {
+	var bits uint64
+	var flt *floatInfo
+
+	switch bitSize {
+	case 32:
+		bits = uint64(math.Float32bits(float32(val)))
+		flt = &float32info
+	case 64:
+		bits = math.Float64bits(val)
+		flt = &float64info
+	default:
+		panic("newTestInfo: illegal bitSize")
+	}
+
+	neg := bits>>(flt.expbits+flt.mantbits) != 0
+	exp := int(bits>>flt.mantbits) & (1<<flt.expbits - 1)
+	mant := bits & (uint64(1)<<flt.mantbits - 1)
+	denorm := false
+
+	switch exp {
+	case 1<<flt.expbits - 1:
+		// Inf, NaN
+		// Skip for testing.
+		return testInfo{}, false
+
+	case 0:
+		// Denormalized
+		exp++
+		denorm = true
+
+	default:
+		// Add the implicit top bit
+		mant |= uint64(1) << flt.mantbits
+	}
+	exp += flt.bias
+	return testInfo{val, neg, mant, exp, denorm, flt}, true
+}
+
+// A utility function for testing.
+func RunDragonboxFtoa(val float64, bitSize int) (string, time.Duration) {
+	test, ok := newTestInfo(val, bitSize)
+	if !ok {
+		return "", 0
+	}
+
+	neg := test.neg
+	mant := test.mant
+	exp := test.exp
+	flt := test.flt
+	denorm := test.denorm
+
+	var digs decimalSlice
+	var dbuf [32]byte
+	digs.d = dbuf[:]
+	start := time.Now()
+	dragonboxFtoa(&digs, mant, exp-int(flt.mantbits), denorm, bitSize)
+	elapsed := time.Since(start)
+
+	var fbuf [32]byte
+	prec := max(digs.nd-1, 0)
+	output := string(formatDigits(fbuf[:0], true, neg, digs, prec, 'e'))
+
+	return output, elapsed
+}
+
+// A utility function for testing.
+func RunRyuFtoaShortest(val float64, bitSize int) (string, time.Duration) {
+	test, ok := newTestInfo(val, bitSize)
+	if !ok {
+		return "", 0
+	}
+
+	neg := test.neg
+	mant := test.mant
+	exp := test.exp
+	flt := test.flt
+
+	var digs decimalSlice
+	var dbuf [32]byte
+	digs.d = dbuf[:]
+	start := time.Now()
+	ryuFtoaShortest(&digs, mant, exp-int(flt.mantbits), flt)
+	elapsed := time.Since(start)
+
+	var fbuf [32]byte
+	prec := max(digs.nd-1, 0)
+	output := string(formatDigits(fbuf[:0], true, neg, digs, prec, 'e'))
+
+	return output, elapsed
+}
+
+// A utility function for profiling.
+// Excludes slow code to allow more relevant samples to be collected.
+func ProfileDragonboxFtoa(val float64, bitSize int) {
+	test, ok := newTestInfo(val, bitSize)
+	if !ok {
+		return
+	}
+
+	mant := test.mant
+	exp := test.exp
+	flt := test.flt
+	denorm := test.denorm
+
+	var digs decimalSlice
+	var dbuf [32]byte
+	digs.d = dbuf[:]
+	dragonboxFtoa(&digs, mant, exp-int(flt.mantbits), denorm, bitSize)
+}
+
+// A utility function for profiling.
+// Excludes slow code to allow more relevant samples to be collected.
+func ProfileRyuFtoaShortest(val float64, bitSize int) {
+	test, ok := newTestInfo(val, bitSize)
+	if !ok {
+		return
+	}
+
+	mant := test.mant
+	exp := test.exp
+	flt := test.flt
+
+	var digs decimalSlice
+	var dbuf [32]byte
+	digs.d = dbuf[:]
+	ryuFtoaShortest(&digs, mant, exp-int(flt.mantbits), flt)
 }
