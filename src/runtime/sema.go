@@ -296,10 +296,9 @@ func semrelease1(addr *uint32, handoff bool, skipframes int) {
 func semreleaseWithMax(addr *uint32, max uint32, skipframes int) {
 	root := semtable.rootFor(addr)
 	lockWithRank(&root.lock, lockRankRoot)
-	if atomic.Load(addr) == max {
-		throw("gocon2025: sema value reached max")
+	if atomic.Load(addr) != max {
+		atomic.Xadd(addr, 1)
 	}
-	atomic.Xadd(addr, 1)
 	if root.nwait.Load() == 0 {
 		unlock(&root.lock)
 		return

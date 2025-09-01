@@ -4,32 +4,152 @@ import (
 	isync "internal/sync"
 )
 
-type MyMutex struct {
-	_ noCopy
+// NOTE: Not using generics for the sake of simplicity in the slides
 
-	// mu isync.MyMutex1
-	// mu isync.MyMutex2
-	// mu isync.MyMutex3
-	mu isync.MyMutex4
-	// mu isync.MyMutex5
-	// mu isync.MyMutex6
-	// mu isync.MyMutex7
+/******************************************************************************/
+/*                                  MyMutex1                                  */
+/******************************************************************************/
+
+type MyMutex1 struct {
+	_  noCopy
+	mu *isync.MyMutex1
 }
 
-var _ Locker = &MyMutex{}
-
-// func NewMyMutex() isync.MyMutex1 {
-// 	return isync.NewMyMutex1()
-// }
-
-func (m *MyMutex) TryLock() bool {
-	return m.mu.TryLock()
+func NewMyMutex1() *MyMutex1 {
+	mu := isync.NewMyMutex1()
+	return &MyMutex1{mu: mu}
 }
 
-func (m *MyMutex) Lock() {
+func (m *MyMutex1) Lock() {
 	m.mu.Lock()
 }
 
-func (m *MyMutex) Unlock() {
+func (m *MyMutex1) Unlock() {
+	m.mu.Unlock()
+}
+
+/******************************************************************************/
+/*                                  MyMutex2                                  */
+/******************************************************************************/
+
+type MyMutex2 struct {
+	_  noCopy
+	mu isync.MyMutex2
+}
+
+func (m *MyMutex2) TryLock() bool {
+	return m.mu.TryLock()
+}
+
+func (m *MyMutex2) Lock() {
+	m.mu.Lock()
+}
+
+func (m *MyMutex2) Unlock() {
+	m.mu.Unlock()
+}
+
+/******************************************************************************/
+/*                                  MyMutex3                                  */
+/******************************************************************************/
+
+type MyMutex3 struct {
+	_  noCopy
+	mu isync.MyMutex3
+}
+
+func (m *MyMutex3) TryLock() bool {
+	return m.mu.TryLock()
+}
+
+func (m *MyMutex3) Lock() {
+	m.mu.Lock()
+}
+
+func (m *MyMutex3) Unlock() {
+	m.mu.Unlock()
+}
+
+/******************************************************************************/
+/*                                  MyMutex4                                  */
+/******************************************************************************/
+
+type MyMutex4 struct {
+	_  noCopy
+	mu isync.MyMutex4
+}
+
+func (m *MyMutex4) TryLock() bool {
+	return m.mu.TryLock()
+}
+
+func (m *MyMutex4) Lock() {
+	m.mu.Lock()
+}
+
+func (m *MyMutex4) Unlock() {
+	m.mu.Unlock()
+}
+
+/******************************************************************************/
+/*                                  MyMutex5                                  */
+/******************************************************************************/
+
+type MyMutex5 struct {
+	_  noCopy
+	mu isync.MyMutex5
+}
+
+func (m *MyMutex5) TryLock() bool {
+	return m.mu.TryLock()
+}
+
+func (m *MyMutex5) Lock() {
+	m.mu.Lock()
+}
+
+func (m *MyMutex5) Unlock() {
+	m.mu.Unlock()
+}
+
+/******************************************************************************/
+/*                                  MyMutex6                                  */
+/******************************************************************************/
+
+type MyMutex6 struct {
+	_  noCopy
+	mu isync.MyMutex6
+}
+
+func (m *MyMutex6) TryLock() bool {
+	return m.mu.TryLock()
+}
+
+func (m *MyMutex6) Lock() {
+	m.mu.Lock()
+}
+
+func (m *MyMutex6) Unlock() {
+	m.mu.Unlock()
+}
+
+/******************************************************************************/
+/*                                  MyMutex7                                  */
+/******************************************************************************/
+
+type MyMutex7 struct {
+	_  noCopy
+	mu isync.MyMutex7
+}
+
+func (m *MyMutex7) TryLock() bool {
+	return m.mu.TryLock()
+}
+
+func (m *MyMutex7) Lock() {
+	m.mu.Lock()
+}
+
+func (m *MyMutex7) Unlock() {
 	m.mu.Unlock()
 }

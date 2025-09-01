@@ -19,8 +19,8 @@ type MyMutex1 struct {
 	sema uint32
 }
 
-func NewMyMutex1() MyMutex1 {
-	return MyMutex1{sema: 1} // need to init sema to 1
+func NewMyMutex1() *MyMutex1 {
+	return &MyMutex1{sema: 1} // need to init sema to 1
 }
 
 // NOTE: No TryLock() possible
