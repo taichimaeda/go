@@ -220,11 +220,9 @@ func (m *MyMutex4) unlockSlow(new int32) {
 		}
 		new = old - 1<<myMutexWaiterShift
 		if atomic.CompareAndSwapInt32(&m.state, old, new) {
-			// hack to prevent sema value from wrapping around
-			// cannot set max to 1 since otherwise waiters count can become zero even if there are waiters
-			max := 2 << (32 - myMutexWaiterShift)
+			handoff := false
 			skipframes := 2
-			runtime_SemreleaseWithMax(&m.sema, uint32(max), skipframes)
+			runtime_Semrelease(&m.sema, handoff, skipframes)
 		}
 		old = m.state
 	}
