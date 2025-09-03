@@ -139,7 +139,7 @@ func (m *MyMutex6) Unlock() {
 
 type MyMutex7 struct {
 	_  noCopy
-	mu isync.MyMutex7
+	mu isync.MyMutex6
 }
 
 func (m *MyMutex7) TryLock() bool {

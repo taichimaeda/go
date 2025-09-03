@@ -348,114 +348,6 @@ type MyMutex6 struct {
 }
 
 func (m *MyMutex6) TryLock() bool {
-	println("Trying to lock MyMutex6...")
-	defer println("Trying to lock MyMutex6 complete!")
-
-	old := m.state
-	if old&myMutexLocked != 0 {
-		return false
-	}
-	if !atomic.CompareAndSwapInt32(&m.state, old, old|myMutexLocked) {
-		return false
-	}
-	return true
-}
-
-func (m *MyMutex6) Lock() {
-	println("Locking MyMutex6...")
-	defer println("Locking MyMutex6 complete!")
-
-	if atomic.CompareAndSwapInt32(&m.state, 0, myMutexLocked) {
-		return
-	}
-	m.lockSlow()
-}
-
-func (m *MyMutex6) lockSlow() {
-	waited := false // true if waited at least once already
-	awoke := false
-	iter := 0
-	old := m.state
-	for {
-		if old&myMutexLocked != 0 && runtime_canSpin(iter) {
-			if !awoke &&
-				old&myMutexWoken == 0 &&
-				old>>myMutexWaiterShift != 0 &&
-				atomic.CompareAndSwapInt32(&m.state, old, old|myMutexWoken) {
-				awoke = true
-			}
-			runtime_doSpin()
-			iter++
-			old = m.state
-			continue
-		}
-		new := old | myMutexLocked
-		if old&myMutexLocked != 0 {
-			new += 1 << myMutexWaiterShift
-		}
-		if awoke {
-			new &^= myMutexWoken
-		}
-		if atomic.CompareAndSwapInt32(&m.state, old, new) {
-			if old&myMutexLocked == 0 {
-				break
-			}
-			queueLifo := waited // insert at the front of waiter queue if waiting for more than once
-			skipframes := 2
-			waited = true
-			runtime_SemacquireMutex(&m.sema, queueLifo, skipframes)
-			awoke = true
-			iter = 0
-		}
-		old = m.state
-	}
-}
-
-func (m *MyMutex6) Unlock() {
-	println("Unlocking MyMutex6...")
-	defer println("Unlocking MyMutex6 complete!")
-
-	new := atomic.AddInt32(&m.state, -myMutexLocked)
-	if new == 0 {
-		return
-	}
-	m.unlockSlow(new)
-}
-
-func (m *MyMutex6) unlockSlow(new int32) {
-	if (new+myMutexLocked)&myMutexLocked == 0 {
-		fatal("gocon2025: unlock of unlocked MyMutex6!")
-	}
-
-	old := new
-	for {
-		if old>>myMutexWaiterShift == 0 ||
-			old&(myMutexLocked|myMutexWoken) != 0 {
-			return
-		}
-		new = (old - 1<<myMutexWaiterShift) | myMutexWoken
-		if atomic.CompareAndSwapInt32(&m.state, old, new) {
-			handoff := false
-			skipframes := 2
-			runtime_Semrelease(&m.sema, handoff, skipframes)
-			if m.sema > 1 {
-				fatal("gocon2025: sema value should not exceed 1!")
-			}
-		}
-		old = m.state
-	}
-}
-
-/******************************************************************************/
-/*                                  MyMutex7                                  */
-/******************************************************************************/
-
-type MyMutex7 struct {
-	state int32
-	sema  uint32
-}
-
-func (m *MyMutex7) TryLock() bool {
 	println("Trying to lock MyMutex7...")
 	defer println("Trying to lock MyMutex7 complete!")
 
@@ -469,7 +361,7 @@ func (m *MyMutex7) TryLock() bool {
 	return true
 }
 
-func (m *MyMutex7) Lock() {
+func (m *MyMutex6) Lock() {
 	println("Locking MyMutex7...")
 	defer println("Locking MyMutex7 complete!")
 
@@ -479,7 +371,7 @@ func (m *MyMutex7) Lock() {
 	m.lockSlow()
 }
 
-func (m *MyMutex7) lockSlow() {
+func (m *MyMutex6) lockSlow() {
 	var waitStartTime int64 // merged the waited flag into waitStartTime
 	starving := false
 	awoke := false
@@ -518,6 +410,7 @@ func (m *MyMutex7) lockSlow() {
 			if old&(myMutexLocked|myMutexStarving) == 0 {
 				break // newly arriving G should not barge in during starvation mode
 			}
+			// insert at the front of waiter queue if waiting for more than once
 			queueLifo := waitStartTime != 0
 			if waitStartTime == 0 {
 				waitStartTime = runtime_nanotime() // start timer since first sleep
@@ -546,7 +439,7 @@ func (m *MyMutex7) lockSlow() {
 	}
 }
 
-func (m *MyMutex7) Unlock() {
+func (m *MyMutex6) Unlock() {
 	println("Unlocking MyMutex7...")
 	defer println("Unlocking MyMutex7 complete!")
 
@@ -559,7 +452,7 @@ func (m *MyMutex7) Unlock() {
 	m.unlockSlow(new)
 }
 
-func (m *MyMutex7) unlockSlow(new int32) {
+func (m *MyMutex6) unlockSlow(new int32) {
 	if (new+myMutexLocked)&myMutexLocked == 0 {
 		fatal("gocon2025: unlock of unlocked MyMutex7!")
 	}
