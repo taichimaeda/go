@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"runtime"
 	. "sync"
 	"testing"
 	"time"
@@ -22,11 +21,6 @@ func hammerMyMutex1(m *MyMutex1, loops int, done chan bool) {
 }
 
 func TestMyMutex1(t *testing.T) {
-	if n := runtime.SetMutexProfileFraction(1); n != 0 {
-		t.Logf("got mutexrate %d expected 0", n)
-	}
-	defer runtime.SetMutexProfileFraction(0)
-
 	m := NewMyMutex1()
 
 	m.Lock()
@@ -97,11 +91,6 @@ func hammerMyMutex2(m *MyMutex2, loops int, done chan bool) {
 }
 
 func TestMyMutex2(t *testing.T) {
-	if n := runtime.SetMutexProfileFraction(1); n != 0 {
-		t.Logf("got mutexrate %d expected 0", n)
-	}
-	defer runtime.SetMutexProfileFraction(0)
-
 	var m MyMutex2
 
 	m.Lock()
@@ -179,11 +168,6 @@ func hammerMyMutex3(m *MyMutex3, loops int, done chan bool) {
 }
 
 func TestMyMutex3(t *testing.T) {
-	if n := runtime.SetMutexProfileFraction(1); n != 0 {
-		t.Logf("got mutexrate %d expected 0", n)
-	}
-	defer runtime.SetMutexProfileFraction(0)
-
 	var m MyMutex3
 
 	m.Lock()
@@ -261,11 +245,6 @@ func hammerMyMutex4(m *MyMutex4, loops int, done chan bool) {
 }
 
 func TestMyMutex4(t *testing.T) {
-	if n := runtime.SetMutexProfileFraction(1); n != 0 {
-		t.Logf("got mutexrate %d expected 0", n)
-	}
-	defer runtime.SetMutexProfileFraction(0)
-
 	var m MyMutex4
 
 	m.Lock()
@@ -343,11 +322,6 @@ func hammerMyMutex5(m *MyMutex5, loops int, done chan bool) {
 }
 
 func TestMyMutex5(t *testing.T) {
-	if n := runtime.SetMutexProfileFraction(1); n != 0 {
-		t.Logf("got mutexrate %d expected 0", n)
-	}
-	defer runtime.SetMutexProfileFraction(0)
-
 	var m MyMutex5
 
 	m.Lock()
@@ -425,11 +399,6 @@ func hammerMyMutex6(m *MyMutex6, loops int, done chan bool) {
 }
 
 func TestMyMutex6(t *testing.T) {
-	if n := runtime.SetMutexProfileFraction(1); n != 0 {
-		t.Logf("got mutexrate %d expected 0", n)
-	}
-	defer runtime.SetMutexProfileFraction(0)
-
 	var m MyMutex6
 
 	m.Lock()

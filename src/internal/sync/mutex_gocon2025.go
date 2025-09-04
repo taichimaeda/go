@@ -372,7 +372,7 @@ func (m *MyMutex6) Lock() {
 }
 
 func (m *MyMutex6) lockSlow() {
-	var waitStartTime int64 // merged the waited flag into waitStartTime
+	var waitStartTime int64
 	starving := false
 	awoke := false
 	iter := 0
