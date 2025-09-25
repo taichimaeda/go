@@ -48,7 +48,7 @@ func (m *MyMutex1) Unlock() {
 /******************************************************************************/
 
 type MyMutex2 struct {
-	state int32 // could use uint23 instead
+	state int32
 	sema  uint32
 }
 
@@ -66,7 +66,13 @@ func (m *MyMutex2) Lock() {
 	println("Locking MyMutex2...")
 	defer println("Locking MyMutex2 complete!")
 
+	iter := 0
 	for atomic.SwapInt32(&m.state, myMutexLocked) != 0 {
+		if runtime_canSpin(iter) {
+			runtime_doSpin() // spin by yielding CPU if possible
+			iter++
+			continue
+		}
 		queueLifo := false
 		skipframes := 1
 		runtime_SemacquireMutex(&m.sema, queueLifo, skipframes)
@@ -96,9 +102,16 @@ func (m *MyMutex3) TryLock() bool {
 	println("Trying to lock MyMutex3...")
 	defer println("Trying to lock MyMutex3 complete!")
 
-	if atomic.SwapInt32(&m.state, myMutexLocked) != 0 {
+	old := m.state
+	if old&myMutexLocked != 0 {
 		return false
 	}
+	if !atomic.CompareAndSwapInt32(&m.state, old, old|myMutexLocked) {
+		// old could change if mutex is acquired by another G
+		// or the G releasing the mutex modified state in the slow path of Unlock()
+		return false
+	}
+	// allows current G to barge in before waiting G's
 	return true
 }
 
@@ -106,16 +119,38 @@ func (m *MyMutex3) Lock() {
 	println("Locking MyMutex3...")
 	defer println("Locking MyMutex3 complete!")
 
+	if atomic.CompareAndSwapInt32(&m.state, 0, myMutexLocked) {
+		return
+	}
+	// above CAS may fail even if the mutex is unlocked when there are waiters
+	m.lockSlow()
+}
+
+func (m *MyMutex3) lockSlow() {
+	// read, copy and update (RCU) loop
 	iter := 0
-	for atomic.SwapInt32(&m.state, myMutexLocked) != 0 {
-		if runtime_canSpin(iter) {
-			runtime_doSpin() // spin by yielding CPU if possible
+	old := m.state // not atomic but okay due to memory barriers
+	for {
+		if old&myMutexLocked != 0 && runtime_canSpin(iter) {
+			runtime_doSpin()
 			iter++
+			old = m.state
 			continue
 		}
-		queueLifo := false
-		skipframes := 1
-		runtime_SemacquireMutex(&m.sema, queueLifo, skipframes)
+		new := old | myMutexLocked
+		if old&myMutexLocked != 0 {
+			new += 1 << myMutexWaiterShift
+		}
+		if atomic.CompareAndSwapInt32(&m.state, old, new) {
+			if old&myMutexLocked == 0 {
+				break // acquired mutex successfully with CAS
+			}
+			queueLifo := false
+			skipframes := 2 // skip 2 callers from stack trace (isync.(*MyMutex3sync).Lock() and sync.(*MyMutex).Lock())
+			runtime_SemacquireMutex(&m.sema, queueLifo, skipframes)
+			iter = 0
+		}
+		old = m.state
 	}
 }
 
@@ -123,10 +158,34 @@ func (m *MyMutex3) Unlock() {
 	println("Unlocking MyMutex3...")
 	defer println("Unlocking MyMutex3 complete!")
 
-	atomic.StoreInt32(&m.state, 0)
-	max := 1
-	skipframes := 1
-	runtime_SemreleaseWithMax(&m.sema, uint32(max), skipframes)
+	// safe to subtract rather than performing CAS
+	// because myMutexLocked bit should be 1 when Unlock() is called
+	new := atomic.AddInt32(&m.state, -myMutexLocked)
+	if new == 0 {
+		return // no need to wake up since there are no waiters
+	}
+	m.unlockSlow(new)
+}
+
+func (m *MyMutex3) unlockSlow(new int32) {
+	if (new+myMutexLocked)&myMutexLocked == 0 { // add back myMutexLocked in case it was not set initially
+		fatal("gocon2025: unlock of unlocked MyMutex3!")
+	}
+
+	old := new
+	for {
+		if old>>myMutexWaiterShift == 0 || // no need to wake up if there are no waiting G's
+			old&myMutexLocked != 0 { // no need to wake up if some G barged in and acquired mutex already
+			return
+		}
+		new = old - 1<<myMutexWaiterShift
+		if atomic.CompareAndSwapInt32(&m.state, old, new) {
+			handoff := false
+			skipframes := 2
+			runtime_Semrelease(&m.sema, handoff, skipframes)
+		}
+		old = m.state
+	}
 }
 
 /******************************************************************************/
@@ -147,11 +206,8 @@ func (m *MyMutex4) TryLock() bool {
 		return false
 	}
 	if !atomic.CompareAndSwapInt32(&m.state, old, old|myMutexLocked) {
-		// old could change if mutex is acquired by another G
-		// or the G releasing the mutex modified state in the slow path of Unlock()
 		return false
 	}
-	// allows current G to barge in before waiting G's
 	return true
 }
 
@@ -162,106 +218,10 @@ func (m *MyMutex4) Lock() {
 	if atomic.CompareAndSwapInt32(&m.state, 0, myMutexLocked) {
 		return
 	}
-	// above CAS may fail even if the mutex is unlocked when there are waiters
 	m.lockSlow()
 }
 
 func (m *MyMutex4) lockSlow() {
-	// read, copy and update (RCU) loop
-	iter := 0
-	old := m.state // not atomic but okay due to memory barriers
-	for {
-		if old&myMutexLocked != 0 && runtime_canSpin(iter) {
-			runtime_doSpin()
-			iter++
-			old = m.state
-			continue
-		}
-		new := old | myMutexLocked
-		if old&myMutexLocked != 0 {
-			new += 1 << myMutexWaiterShift
-		}
-		if atomic.CompareAndSwapInt32(&m.state, old, new) {
-			if old&myMutexLocked == 0 {
-				break // acquired mutex successfully with CAS
-			}
-			queueLifo := false
-			skipframes := 2 // skip 2 callers from stack trace (isync.(*MyMutex4sync).Lock() and sync.(*MyMutex).Lock())
-			runtime_SemacquireMutex(&m.sema, queueLifo, skipframes)
-			iter = 0
-		}
-		old = m.state
-	}
-}
-
-func (m *MyMutex4) Unlock() {
-	println("Unlocking MyMutex4...")
-	defer println("Unlocking MyMutex4 complete!")
-
-	// safe to subtract rather than performing CAS
-	// because myMutexLocked bit should be 1 when Unlock() is called
-	new := atomic.AddInt32(&m.state, -myMutexLocked)
-	if new == 0 {
-		return // no need to wake up since there are no waiters
-	}
-	m.unlockSlow(new)
-}
-
-func (m *MyMutex4) unlockSlow(new int32) {
-	if (new+myMutexLocked)&myMutexLocked == 0 { // add back myMutexLocked in case it was not set initially
-		fatal("gocon2025: unlock of unlocked MyMutex4!")
-	}
-
-	old := new
-	for {
-		if old>>myMutexWaiterShift == 0 || // no need to wake up if there are no waiting G's
-			old&myMutexLocked != 0 { // no need to wake up if some G barged in and acquired mutex already
-			return
-		}
-		new = old - 1<<myMutexWaiterShift
-		if atomic.CompareAndSwapInt32(&m.state, old, new) {
-			handoff := false
-			skipframes := 2
-			runtime_Semrelease(&m.sema, handoff, skipframes)
-		}
-		old = m.state
-	}
-}
-
-/******************************************************************************/
-/*                                  MyMutex5                                  */
-/******************************************************************************/
-
-type MyMutex5 struct {
-	state int32
-	sema  uint32
-}
-
-func (m *MyMutex5) TryLock() bool {
-	println("Trying to lock MyMutex5...")
-	defer println("Trying to lock MyMutex5 complete!")
-
-	old := m.state
-	if old&myMutexLocked != 0 {
-		return false
-	}
-	if !atomic.CompareAndSwapInt32(&m.state, old, old|myMutexLocked) {
-		return false
-	}
-	return true
-}
-
-func (m *MyMutex5) Lock() {
-	println("Locking MyMutex5...")
-	defer println("Locking MyMutex5 complete!")
-
-	if atomic.CompareAndSwapInt32(&m.state, 0, myMutexLocked) {
-		return
-	}
-	m.lockSlow()
-}
-
-func (m *MyMutex5) lockSlow() {
 	awoke := false // true if current G being awake is already reflected in the myMutexWoken bit
 	iter := 0
 	old := m.state
@@ -303,9 +263,9 @@ func (m *MyMutex5) lockSlow() {
 	}
 }
 
-func (m *MyMutex5) Unlock() {
-	println("Unlocking MyMutex5...")
-	defer println("Unlocking MyMutex5 complete!")
+func (m *MyMutex4) Unlock() {
+	println("Unlocking MyMutex4...")
+	defer println("Unlocking MyMutex4 complete!")
 
 	new := atomic.AddInt32(&m.state, -myMutexLocked)
 	if new == 0 {
@@ -314,9 +274,9 @@ func (m *MyMutex5) Unlock() {
 	m.unlockSlow(new)
 }
 
-func (m *MyMutex5) unlockSlow(new int32) {
+func (m *MyMutex4) unlockSlow(new int32) {
 	if (new+myMutexLocked)&myMutexLocked == 0 {
-		fatal("gocon2025: unlock of unlocked MyMutex5!")
+		fatal("gocon2025: unlock of unlocked MyMutex4!")
 	}
 
 	old := new
@@ -339,15 +299,15 @@ func (m *MyMutex5) unlockSlow(new int32) {
 }
 
 /******************************************************************************/
-/*                                  MyMutex6                                  */
+/*                                  MyMutex5                                  */
 /******************************************************************************/
 
-type MyMutex6 struct {
+type MyMutex5 struct {
 	state int32
 	sema  uint32
 }
 
-func (m *MyMutex6) TryLock() bool {
+func (m *MyMutex5) TryLock() bool {
 	println("Trying to lock MyMutex7...")
 	defer println("Trying to lock MyMutex7 complete!")
 
@@ -361,7 +321,7 @@ func (m *MyMutex6) TryLock() bool {
 	return true
 }
 
-func (m *MyMutex6) Lock() {
+func (m *MyMutex5) Lock() {
 	println("Locking MyMutex7...")
 	defer println("Locking MyMutex7 complete!")
 
@@ -371,7 +331,7 @@ func (m *MyMutex6) Lock() {
 	m.lockSlow()
 }
 
-func (m *MyMutex6) lockSlow() {
+func (m *MyMutex5) lockSlow() {
 	var waitStartTime int64
 	starving := false
 	awoke := false
@@ -439,7 +399,7 @@ func (m *MyMutex6) lockSlow() {
 	}
 }
 
-func (m *MyMutex6) Unlock() {
+func (m *MyMutex5) Unlock() {
 	println("Unlocking MyMutex7...")
 	defer println("Unlocking MyMutex7 complete!")
 
@@ -452,7 +412,7 @@ func (m *MyMutex6) Unlock() {
 	m.unlockSlow(new)
 }
 
-func (m *MyMutex6) unlockSlow(new int32) {
+func (m *MyMutex5) unlockSlow(new int32) {
 	if (new+myMutexLocked)&myMutexLocked == 0 {
 		fatal("gocon2025: unlock of unlocked MyMutex7!")
 	}
